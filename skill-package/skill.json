@@ -1,0 +1,61 @@
+{
+  "manifest": {
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:plexMusicPlayer"
+        },
+        "interfaces": [
+          {
+            "type": "AUDIO_PLAYER"
+          }
+        ]
+      }
+    },
+    "manifestVersion": "1.0",
+    "permissions": [],
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "",
+          "termsOfUseUrl": ""
+        }
+      },
+      "containsAds": false,
+      "isExportCompliant": true,
+      "isChildDirected": false,
+      "usesPersonalInfo": false
+    },
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "name": "Plex Music Player",
+          "summary": "Play music from your Plex Media Server on Alexa devices.",
+          "description": "Plex Music Player allows you to stream music from your personal Plex Media Server through Alexa. Play songs, artists, albums, and playlists using voice commands. Supports playback controls including next, previous, shuffle, and loop.",
+          "examplePhrases": [
+            "Alexa, open plex music",
+            "Alexa, ask plex music to play Arctic Monkeys",
+            "Alexa, ask plex music to play my favorites playlist"
+          ],
+          "keywords": [
+            "plex",
+            "music",
+            "streaming",
+            "media server",
+            "audio"
+          ]
+        }
+      },
+      "isAvailableWorldwide": false,
+      "testingInstructions": "You need a Plex Media Server with a music library and a valid Plex token configured as Lambda environment variables.",
+      "category": "MUSIC_AND_AUDIO",
+      "distributionCountries": [
+        "US",
+        "GB",
+        "CA",
+        "AU"
+      ]
+    }
+  }
+}

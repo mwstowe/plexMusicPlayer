@@ -1,0 +1,271 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "plex music",
+      "intents": [
+        {
+          "name": "PlaySongIntent",
+          "slots": [
+            {
+              "name": "song",
+              "type": "AMAZON.MusicRecording"
+            }
+          ],
+          "samples": [
+            "play {song}",
+            "play the song {song}",
+            "put on {song}",
+            "I want to hear {song}",
+            "play me {song}",
+            "can you play {song}",
+            "start playing {song}",
+            "queue up {song}"
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "slots": [
+            {
+              "name": "artist",
+              "type": "AMAZON.MusicGroup"
+            }
+          ],
+          "samples": [
+            "play {artist}",
+            "play songs by {artist}",
+            "play music by {artist}",
+            "put on {artist}",
+            "I want to hear {artist}",
+            "play me some {artist}",
+            "play something by {artist}",
+            "play tracks by {artist}",
+            "let me hear {artist}",
+            "queue up {artist}"
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "slots": [
+            {
+              "name": "album",
+              "type": "AMAZON.MusicAlbum"
+            },
+            {
+              "name": "artist",
+              "type": "AMAZON.MusicGroup"
+            }
+          ],
+          "samples": [
+            "play the album {album}",
+            "play album {album}",
+            "play the album {album} by {artist}",
+            "play {album} by {artist}",
+            "put on the album {album}",
+            "I want to hear the album {album}",
+            "play {album} album",
+            "queue the album {album}"
+          ]
+        },
+        {
+          "name": "PlayPlaylistIntent",
+          "slots": [
+            {
+              "name": "playlist",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play my {playlist} playlist",
+            "play the {playlist} playlist",
+            "play playlist {playlist}",
+            "put on the {playlist} playlist",
+            "start the {playlist} playlist",
+            "play the playlist called {playlist}",
+            "queue the {playlist} playlist"
+          ]
+        },
+        {
+          "name": "NowPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what's playing",
+            "what is playing",
+            "what song is this",
+            "what's this song",
+            "what am I listening to",
+            "tell me what's playing",
+            "what is this track",
+            "who is this",
+            "who sings this",
+            "what's the name of this song"
+          ]
+        },
+        {
+          "name": "AMAZON.PauseIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ResumeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NextIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PreviousIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOffIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOffIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StartOverIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        }
+      ]
+    },
+    "dialog": {
+      "intents": [
+        {
+          "name": "PlaySongIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "song",
+              "type": "AMAZON.MusicRecording",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.Slot.PlaySong.song"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "artist",
+              "type": "AMAZON.MusicGroup",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.Slot.PlayArtist.artist"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "album",
+              "type": "AMAZON.MusicAlbum",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.Slot.PlayAlbum.album"
+              }
+            },
+            {
+              "name": "artist",
+              "type": "AMAZON.MusicGroup",
+              "confirmationRequired": false,
+              "elicitationRequired": false,
+              "prompts": {}
+            }
+          ]
+        },
+        {
+          "name": "PlayPlaylistIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "playlist",
+              "type": "AMAZON.SearchQuery",
+              "confirmationRequired": false,
+              "elicitationRequired": true,
+              "prompts": {
+                "elicitation": "Elicit.Slot.PlayPlaylist.playlist"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "Elicit.Slot.PlaySong.song",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "What song would you like me to play?"
+          }
+        ]
+      },
+      {
+        "id": "Elicit.Slot.PlayArtist.artist",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "Which artist would you like to hear?"
+          }
+        ]
+      },
+      {
+        "id": "Elicit.Slot.PlayAlbum.album",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "Which album would you like me to play?"
+          }
+        ]
+      },
+      {
+        "id": "Elicit.Slot.PlayPlaylist.playlist",
+        "variations": [
+          {
+            "type": "PlainText",
+            "value": "Which playlist would you like to hear?"
+          }
+        ]
+      }
+    ]
+  }
+}

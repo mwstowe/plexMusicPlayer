@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: plexMusicPlayer - Alexa skill for playing music from Plex Media Server
+
+Parameters:
+  PlexUrl:
+    Type: String
+    Description: Your Plex server URL (e.g., https://your-server:32400)
+    NoEcho: true
+  PlexToken:
+    Type: String
+    Description: Your Plex authentication token
+    NoEcho: true
+  PlexMusicLibrary:
+    Type: String
+    Default: Music
+    Description: Name of your Plex music library section
+  AlexaSkillId:
+    Type: String
+    Description: Your Alexa Skill ID (amzn1.ask.skill.xxx)
+
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: python3.12
+    MemorySize: 256
+
+Resources:
+  PlexMusicPlayerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: plexMusicPlayer
+      CodeUri: lambda/
+      Handler: lambda_function.handler
+      Description: Lambda handler for Plex Music Player Alexa skill
+      Environment:
+        Variables:
+          PLEX_URL: !Ref PlexUrl
+          PLEX_TOKEN: !Ref PlexToken
+          PLEX_MUSIC_LIBRARY: !Ref PlexMusicLibrary
+      Events:
+        AlexaSkillEvent:
+          Type: AlexaSkill
+          Properties:
+            SkillId: !Ref AlexaSkillId
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+Outputs:
+  FunctionArn:
+    Description: Lambda function ARN (use this as the Alexa skill endpoint)
+    Value: !GetAtt PlexMusicPlayerFunction.Arn
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref PlexMusicPlayerFunction

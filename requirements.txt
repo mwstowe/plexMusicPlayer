@@ -1,0 +1,4 @@
+ask-sdk-core==1.19.0
+ask-sdk-model==1.86.0
+plexapi==4.15.16
+boto3==1.35.0
