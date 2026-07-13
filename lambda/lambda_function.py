@@ -58,22 +58,26 @@ def build_audio_play_directive(track, plex, enqueue=False):
 
 def build_card(track_info, plex):
     """Build a visual card for the Alexa app."""
-    image = None
-    if track_info.get("art_url"):
-        image = Image(
-            small_image_url=track_info["art_url"],
-            large_image_url=track_info["art_url"],
-        )
+    # Note: Alexa card images must be on port 443 and publicly accessible.
+    # Plex art URLs on port 32400 will be rejected, so skip images for now.
     return StandardCard(
         title=track_info["title"],
         text=f"{track_info['artist']} — {track_info['album']}",
-        image=image,
+        image=None,
     )
 
 
 def play_track(handler_input, track, speech_text=None):
     """Play a track and return the response."""
     directive, track_info = build_audio_play_directive(track, plex_client)
+
+    stream_url = plex_client.get_stream_url(track)
+    logger.info(
+        "Playing track: %s | URL: %s | Token: %s",
+        track_info["title"],
+        stream_url,
+        str(track.ratingKey),
+    )
 
     response_builder = handler_input.response_builder
     response_builder.add_directive(directive)
