@@ -102,9 +102,9 @@ class PlexMusicClient:
         tracks = []
         for key in rating_keys:
             try:
-                items = self.server.fetchItems(int(key))
-                if items:
-                    tracks.append(items[0])
+                results = self.server.fetchItems(f"/library/metadata/{key}")
+                if results:
+                    tracks.append(results[0])
             except Exception as e:
                 logger.error("Failed to fetch track %s: %s", key, e)
                 continue
