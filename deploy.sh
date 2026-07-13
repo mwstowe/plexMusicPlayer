@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -eo pipefail
 
 # plexMusicPlayer deployment script
 # Uses AWS SAM CLI to build and deploy the Lambda function
@@ -16,6 +16,17 @@ echo ""
 # Check prerequisites
 command -v sam >/dev/null 2>&1 || { echo "Error: AWS SAM CLI is required. Install from https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"; exit 1; }
 command -v aws >/dev/null 2>&1 || { echo "Error: AWS CLI is required."; exit 1; }
+
+# Prompt for missing environment variables
+if [ -z "${PLEX_URL:-}" ]; then
+    read -rp "Enter your Plex server URL (e.g., https://your-server.plex.direct:32400): " PLEX_URL
+fi
+if [ -z "${PLEX_TOKEN:-}" ]; then
+    read -rp "Enter your Plex token: " PLEX_TOKEN
+fi
+if [ -z "${ALEXA_SKILL_ID:-}" ]; then
+    read -rp "Enter your Alexa Skill ID (amzn1.ask.skill.xxx): " ALEXA_SKILL_ID
+fi
 
 # Build the Lambda package
 echo "Building Lambda package..."
