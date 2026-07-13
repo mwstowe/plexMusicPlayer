@@ -8,18 +8,14 @@
           "slots": [
             {
               "name": "song",
-              "type": "AMAZON.MusicRecording"
+              "type": "AMAZON.SearchQuery"
             }
           ],
           "samples": [
-            "play {song}",
             "play the song {song}",
-            "put on {song}",
-            "I want to hear {song}",
-            "play me {song}",
-            "can you play {song}",
-            "start playing {song}",
-            "queue up {song}"
+            "play song {song}",
+            "play the track {song}",
+            "play track {song}"
           ]
         },
         {
@@ -27,20 +23,16 @@
           "slots": [
             {
               "name": "artist",
-              "type": "AMAZON.MusicGroup"
+              "type": "AMAZON.SearchQuery"
             }
           ],
           "samples": [
-            "play {artist}",
             "play songs by {artist}",
             "play music by {artist}",
-            "put on {artist}",
-            "I want to hear {artist}",
-            "play me some {artist}",
             "play something by {artist}",
             "play tracks by {artist}",
-            "let me hear {artist}",
-            "queue up {artist}"
+            "play artist {artist}",
+            "play the artist {artist}"
           ]
         },
         {
@@ -48,22 +40,37 @@
           "slots": [
             {
               "name": "album",
-              "type": "AMAZON.MusicAlbum"
+              "type": "AMAZON.SearchQuery"
             },
             {
               "name": "artist",
-              "type": "AMAZON.MusicGroup"
+              "type": "AMAZON.SearchQuery"
             }
           ],
           "samples": [
             "play the album {album}",
             "play album {album}",
             "play the album {album} by {artist}",
-            "play {album} by {artist}",
-            "put on the album {album}",
-            "I want to hear the album {album}",
-            "play {album} album",
-            "queue the album {album}"
+            "play album {album} by {artist}"
+          ]
+        },
+        {
+          "name": "PlayIntent",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play {query}",
+            "put on {query}",
+            "I want to hear {query}",
+            "play me {query}",
+            "can you play {query}",
+            "start playing {query}",
+            "queue up {query}",
+            "let me hear {query}"
           ]
         },
         {
@@ -82,6 +89,23 @@
             "start the {playlist} playlist",
             "play the playlist called {playlist}",
             "queue the {playlist} playlist"
+          ]
+        },
+        {
+          "name": "ShuffleAllIntent",
+          "slots": [],
+          "samples": [
+            "shuffle everything",
+            "shuffle all songs",
+            "shuffle all music",
+            "shuffle all my music",
+            "play everything on shuffle",
+            "shuffle the library",
+            "play all songs shuffled",
+            "mix it up",
+            "play random music",
+            "play something random",
+            "shuffle all"
           ]
         },
         {
@@ -153,119 +177,6 @@
           "samples": []
         }
       ]
-    },
-    "dialog": {
-      "intents": [
-        {
-          "name": "PlaySongIntent",
-          "confirmationRequired": false,
-          "prompts": {},
-          "slots": [
-            {
-              "name": "song",
-              "type": "AMAZON.MusicRecording",
-              "confirmationRequired": false,
-              "elicitationRequired": true,
-              "prompts": {
-                "elicitation": "Elicit.Slot.PlaySong.song"
-              }
-            }
-          ]
-        },
-        {
-          "name": "PlayArtistIntent",
-          "confirmationRequired": false,
-          "prompts": {},
-          "slots": [
-            {
-              "name": "artist",
-              "type": "AMAZON.MusicGroup",
-              "confirmationRequired": false,
-              "elicitationRequired": true,
-              "prompts": {
-                "elicitation": "Elicit.Slot.PlayArtist.artist"
-              }
-            }
-          ]
-        },
-        {
-          "name": "PlayAlbumIntent",
-          "confirmationRequired": false,
-          "prompts": {},
-          "slots": [
-            {
-              "name": "album",
-              "type": "AMAZON.MusicAlbum",
-              "confirmationRequired": false,
-              "elicitationRequired": true,
-              "prompts": {
-                "elicitation": "Elicit.Slot.PlayAlbum.album"
-              }
-            },
-            {
-              "name": "artist",
-              "type": "AMAZON.MusicGroup",
-              "confirmationRequired": false,
-              "elicitationRequired": false,
-              "prompts": {}
-            }
-          ]
-        },
-        {
-          "name": "PlayPlaylistIntent",
-          "confirmationRequired": false,
-          "prompts": {},
-          "slots": [
-            {
-              "name": "playlist",
-              "type": "AMAZON.SearchQuery",
-              "confirmationRequired": false,
-              "elicitationRequired": true,
-              "prompts": {
-                "elicitation": "Elicit.Slot.PlayPlaylist.playlist"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    "prompts": [
-      {
-        "id": "Elicit.Slot.PlaySong.song",
-        "variations": [
-          {
-            "type": "PlainText",
-            "value": "What song would you like me to play?"
-          }
-        ]
-      },
-      {
-        "id": "Elicit.Slot.PlayArtist.artist",
-        "variations": [
-          {
-            "type": "PlainText",
-            "value": "Which artist would you like to hear?"
-          }
-        ]
-      },
-      {
-        "id": "Elicit.Slot.PlayAlbum.album",
-        "variations": [
-          {
-            "type": "PlainText",
-            "value": "Which album would you like me to play?"
-          }
-        ]
-      },
-      {
-        "id": "Elicit.Slot.PlayPlaylist.playlist",
-        "variations": [
-          {
-            "type": "PlainText",
-            "value": "Which playlist would you like to hear?"
-          }
-        ]
-      }
-    ]
+    }
   }
 }

@@ -276,6 +276,98 @@ class PlayPlaylistIntentHandler(AbstractRequestHandler):
         return play_track(handler_input, track, speech)
 
 
+class PlayIntentHandler(AbstractRequestHandler):
+    """Handle generic play requests - searches songs, artists, then albums."""
+
+    def can_handle(self, handler_input):
+        return is_intent_name("PlayIntent")(handler_input)
+
+    def handle(self, handler_input):
+        slots = handler_input.request_envelope.request.intent.slots
+        query_slot = slots.get("query", {})
+        query = query_slot.value if query_slot else None
+
+        if not query:
+            return (
+                handler_input.response_builder.speak(
+                    "What would you like me to play?"
+                )
+                .ask("What would you like to listen to?")
+                .response
+            )
+
+        # Try song first
+        tracks = plex_client.search_tracks(query)
+        if tracks:
+            queue.load(tracks)
+            track = queue.current_track()
+            track_info = plex_client.get_track_info(track)
+            if len(tracks) == 1:
+                speech = f"Playing {track_info['title']} by {track_info['artist']}."
+            else:
+                speech = f"Playing {len(tracks)} tracks matching {query}."
+            return play_track(handler_input, track, speech)
+
+        # Try artist
+        tracks = plex_client.search_artist(query)
+        if tracks:
+            queue.load(tracks)
+            track = queue.current_track()
+            track_info = plex_client.get_track_info(track)
+            speech = (
+                f"Playing {len(tracks)} tracks by {query}, "
+                f"starting with {track_info['title']}."
+            )
+            return play_track(handler_input, track, speech)
+
+        # Try album
+        tracks = plex_client.search_album(query)
+        if tracks:
+            queue.load(tracks)
+            track = queue.current_track()
+            track_info = plex_client.get_track_info(track)
+            speech = (
+                f"Playing the album {query} with {len(tracks)} tracks."
+            )
+            return play_track(handler_input, track, speech)
+
+        return (
+            handler_input.response_builder.speak(
+                f"I couldn't find anything matching {query} in your Plex library."
+            )
+            .ask("Would you like to try something else?")
+            .response
+        )
+
+
+class ShuffleAllIntentHandler(AbstractRequestHandler):
+    """Shuffle all music in the library."""
+
+    def can_handle(self, handler_input):
+        return is_intent_name("ShuffleAllIntent")(handler_input)
+
+    def handle(self, handler_input):
+        tracks = plex_client.get_all_tracks()
+        if not tracks:
+            return (
+                handler_input.response_builder.speak(
+                    "I couldn't find any music in your Plex library."
+                )
+                .response
+            )
+
+        queue.load(tracks)
+        queue.shuffle()
+        track = queue.current_track()
+        track_info = plex_client.get_track_info(track)
+        speech = (
+            f"Shuffling all {len(tracks)} tracks in your library. "
+            f"Starting with {track_info['title']} by {track_info['artist']}."
+        )
+
+        return play_track(handler_input, track, speech)
+
+
 class NowPlayingIntentHandler(AbstractRequestHandler):
     """Tell the user what's currently playing."""
 
@@ -621,6 +713,8 @@ sb.add_request_handler(PlaySongIntentHandler())
 sb.add_request_handler(PlayArtistIntentHandler())
 sb.add_request_handler(PlayAlbumIntentHandler())
 sb.add_request_handler(PlayPlaylistIntentHandler())
+sb.add_request_handler(ShuffleAllIntentHandler())
+sb.add_request_handler(PlayIntentHandler())
 sb.add_request_handler(NowPlayingIntentHandler())
 sb.add_request_handler(ShuffleOnIntentHandler())
 sb.add_request_handler(ShuffleOffIntentHandler())

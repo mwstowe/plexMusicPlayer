@@ -93,6 +93,10 @@ class PlexMusicClient:
             pass
         return []
 
+    def get_all_tracks(self):
+        """Get all tracks in the music library for shuffle-all."""
+        return self.music_library.searchTracks()
+
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.
 
