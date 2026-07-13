@@ -97,6 +97,19 @@ class PlexMusicClient:
         """Get all tracks in the music library for shuffle-all."""
         return self.music_library.searchTracks()
 
+    def get_tracks_by_keys(self, rating_keys):
+        """Fetch tracks by their rating keys (for queue restoration)."""
+        tracks = []
+        for key in rating_keys:
+            try:
+                items = self.server.fetchItems(int(key))
+                if items:
+                    tracks.append(items[0])
+            except Exception:
+                # Track may have been removed — skip it
+                continue
+        return tracks
+
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.
 

@@ -22,6 +22,7 @@ from ask_sdk_model.ui import StandardCard, Image
 
 from plex_client import PlexMusicClient
 from queue_manager import PlaybackQueue
+import queue_persistence
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -31,6 +32,39 @@ plex_client = PlexMusicClient()
 queue = PlaybackQueue()
 
 sb = SkillBuilder()
+
+
+def get_user_id(handler_input):
+    """Extract user ID from the Alexa request."""
+    return handler_input.request_envelope.context.system.user.user_id
+
+
+def restore_queue_if_empty(handler_input):
+    """Restore the queue from DynamoDB if it's empty (cold start)."""
+    if queue.tracks:
+        return True
+
+    user_id = get_user_id(handler_input)
+    saved = queue_persistence.load_queue(user_id)
+    if not saved or not saved["track_keys"]:
+        return False
+
+    tracks = plex_client.get_tracks_by_keys(saved["track_keys"])
+    if not tracks:
+        return False
+
+    queue.tracks = tracks
+    queue.current_index = min(saved["current_index"], len(tracks) - 1)
+    queue.shuffle_enabled = saved["shuffle_enabled"]
+    queue.loop_enabled = saved["loop_enabled"]
+    logger.info("Restored queue: %d tracks, index %d", len(tracks), queue.current_index)
+    return True
+
+
+def save_queue_state(handler_input):
+    """Save the current queue to DynamoDB."""
+    user_id = get_user_id(handler_input)
+    queue_persistence.save_queue(user_id, queue)
 
 
 # --- Helper Functions ---
@@ -93,6 +127,9 @@ def play_track(handler_input, track, speech_text=None):
         stream_url,
         str(track.ratingKey),
     )
+
+    # Persist queue state
+    save_queue_state(handler_input)
 
     response_builder = handler_input.response_builder
     response_builder.add_directive(directive)
@@ -440,6 +477,9 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
         return is_request_type("AudioPlayer.PlaybackNearlyFinished")(handler_input)
 
     def handle(self, handler_input):
+        # Restore queue from DynamoDB if Lambda cold-started
+        restore_queue_if_empty(handler_input)
+
         if not queue.has_next():
             return handler_input.response_builder.response
 
@@ -463,12 +503,18 @@ class PlaybackStartedHandler(AbstractRequestHandler):
         return is_request_type("AudioPlayer.PlaybackStarted")(handler_input)
 
     def handle(self, handler_input):
+        # Restore queue if needed
+        restore_queue_if_empty(handler_input)
+
         # Sync queue index with what's actually playing
         token = handler_input.request_envelope.request.token
         if token and queue.tracks:
             for i, track in enumerate(queue.tracks):
                 if str(track.ratingKey) == token:
                     queue.current_index = i
+                    # Persist the updated index
+                    user_id = get_user_id(handler_input)
+                    queue_persistence.update_index(user_id, i)
                     break
         return handler_input.response_builder.response
 
@@ -550,6 +596,8 @@ class NextIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.NextIntent")(handler_input)
 
     def handle(self, handler_input):
+        restore_queue_if_empty(handler_input)
+
         track = queue.next_track()
         if not track:
             return (
@@ -570,6 +618,8 @@ class PreviousIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.PreviousIntent")(handler_input)
 
     def handle(self, handler_input):
+        restore_queue_if_empty(handler_input)
+
         track = queue.previous_track()
         if not track:
             return (

@@ -28,6 +28,21 @@ Globals:
       - arm64
 
 Resources:
+  QueueTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: plexMusicPlayer-queue
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
   PlexMusicPlayerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -40,6 +55,7 @@ Resources:
           PLEX_URL: !Ref PlexUrl
           PLEX_TOKEN: !Ref PlexToken
           PLEX_MUSIC_LIBRARY: !Ref PlexMusicLibrary
+          QUEUE_TABLE: !Ref QueueTable
       Events:
         AlexaSkillEvent:
           Type: AlexaSkill
@@ -47,6 +63,8 @@ Resources:
             SkillId: !Ref AlexaSkillId
       Policies:
         - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QueueTable
 
 Outputs:
   FunctionArn:
@@ -55,3 +73,6 @@ Outputs:
   FunctionName:
     Description: Lambda function name
     Value: !Ref PlexMusicPlayerFunction
+  QueueTableName:
+    Description: DynamoDB table for queue persistence
+    Value: !Ref QueueTable
