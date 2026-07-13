@@ -494,7 +494,12 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # Restore queue from DynamoDB if Lambda cold-started
-        restore_queue_if_empty(handler_input)
+        restored = restore_queue_if_empty(handler_input)
+        logger.info(
+            "PlaybackNearlyFinished: restored=%s, queue_size=%d, current_index=%d, has_all_keys=%s",
+            restored, len(queue.tracks), queue.current_index,
+            hasattr(queue, '_all_keys') and bool(queue._all_keys)
+        )
 
         # Check if there's a next track available
         next_index = queue.current_index + 1
@@ -502,6 +507,7 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
             # If we have more keys than loaded tracks, fetch the next one
             if hasattr(queue, '_all_keys') and queue._all_keys:
                 real_next = queue._base_index + next_index
+                logger.info("Need to fetch track at real_next=%d, total_keys=%d", real_next, len(queue._all_keys))
                 if real_next < len(queue._all_keys):
                     next_tracks = plex_client.get_tracks_by_keys(
                         [queue._all_keys[real_next]]
@@ -509,9 +515,9 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
                     if next_tracks:
                         queue.tracks.append(next_tracks[0])
                     else:
+                        logger.info("Failed to fetch next track")
                         return handler_input.response_builder.response
                 elif queue.loop_enabled:
-                    # Loop back to beginning
                     next_tracks = plex_client.get_tracks_by_keys(
                         [queue._all_keys[0]]
                     )
@@ -520,10 +526,12 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
                     else:
                         return handler_input.response_builder.response
                 else:
+                    logger.info("No more tracks and loop disabled")
                     return handler_input.response_builder.response
             elif queue.loop_enabled and queue.tracks:
                 next_index = 0
             else:
+                logger.info("No next track available, no _all_keys")
                 return handler_input.response_builder.response
 
         next_track = queue.tracks[next_index]
