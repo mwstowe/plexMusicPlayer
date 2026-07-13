@@ -78,11 +78,13 @@ def play_track(handler_input, track, speech_text=None):
     response_builder = handler_input.response_builder
     response_builder.add_directive(directive)
 
+    # Note: Do NOT call set_should_end_session() with AudioPlayer directives.
+    # Alexa manages the session automatically for audio playback.
+    # Setting it explicitly causes MEDIA_ERROR_INVALID_REQUEST on some devices.
     if speech_text:
         response_builder.speak(speech_text)
 
     response_builder.set_card(build_card(track_info, plex_client))
-    response_builder.set_should_end_session(True)
 
     return response_builder.response
 
