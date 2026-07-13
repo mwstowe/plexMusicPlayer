@@ -1,6 +1,6 @@
 # Local development dependencies
 # (Lambda dependencies are in lambda/requirements.txt)
-ask-sdk-core==1.19.0
-ask-sdk-model==1.86.0
-plexapi==4.15.16
-boto3==1.35.0
+ask-sdk-core>=1.19.0
+ask-sdk-model>=1.82.0
+plexapi>=4.15.0
+boto3>=1.35.0
