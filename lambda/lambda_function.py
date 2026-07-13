@@ -49,8 +49,10 @@ def restore_queue_if_empty(handler_input):
         return True
 
     user_id = get_user_id(handler_input)
+    logger.info("Attempting queue restore for user: %s", user_id[:20] if user_id else "None")
     saved = queue_persistence.load_queue(user_id)
     if not saved or not saved["track_keys"]:
+        logger.info("No saved queue found in DynamoDB")
         return False
 
     # Store the raw keys in the queue for later use
@@ -80,6 +82,7 @@ def restore_queue_if_empty(handler_input):
 def save_queue_state(handler_input):
     """Save the current queue to DynamoDB."""
     user_id = get_user_id(handler_input)
+    logger.info("Saving queue for user: %s, tracks: %d", user_id[:20] if user_id else "None", len(queue.tracks))
     queue_persistence.save_queue(user_id, queue)
 
 
