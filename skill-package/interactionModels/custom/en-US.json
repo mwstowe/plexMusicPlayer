@@ -15,7 +15,14 @@
             "play the song {song}",
             "play song {song}",
             "play the track {song}",
-            "play track {song}"
+            "play track {song}",
+            "play {song}",
+            "put on {song}",
+            "I want to hear {song}",
+            "play me {song}",
+            "can you play {song}",
+            "start playing {song}",
+            "let me hear {song}"
           ]
         },
         {
@@ -55,25 +62,6 @@
           ]
         },
         {
-          "name": "PlayIntent",
-          "slots": [
-            {
-              "name": "query",
-              "type": "AMAZON.SearchQuery"
-            }
-          ],
-          "samples": [
-            "play {query}",
-            "put on {query}",
-            "I want to hear {query}",
-            "play me {query}",
-            "can you play {query}",
-            "start playing {query}",
-            "queue up {query}",
-            "let me hear {query}"
-          ]
-        },
-        {
           "name": "PlayPlaylistIntent",
           "slots": [
             {
@@ -87,8 +75,7 @@
             "play playlist {playlist}",
             "put on the {playlist} playlist",
             "start the {playlist} playlist",
-            "play the playlist called {playlist}",
-            "queue the {playlist} playlist"
+            "play the playlist called {playlist}"
           ]
         },
         {
