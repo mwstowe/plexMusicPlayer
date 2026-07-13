@@ -105,9 +105,10 @@ class PlexMusicClient:
                 items = self.server.fetchItems(int(key))
                 if items:
                     tracks.append(items[0])
-            except Exception:
-                # Track may have been removed — skip it
+            except Exception as e:
+                logger.error("Failed to fetch track %s: %s", key, e)
                 continue
+        logger.info("get_tracks_by_keys: requested %d, got %d", len(rating_keys), len(tracks))
         return tracks
 
     def get_stream_url(self, track):
