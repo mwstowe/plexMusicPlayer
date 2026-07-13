@@ -7,12 +7,14 @@ import time
 import boto3
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 TABLE_NAME = os.environ.get("QUEUE_TABLE", "plexMusicPlayer-queue")
 TTL_HOURS = 24
 
-dynamodb = boto3.resource("dynamodb")
+dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 table = dynamodb.Table(TABLE_NAME)
+logger.info("Queue persistence initialized: table=%s", TABLE_NAME)
 
 
 def save_queue(user_id, queue):
@@ -56,16 +58,21 @@ def load_queue(user_id):
         response = table.get_item(Key={"user_id": user_id})
         item = response.get("Item")
         if not item:
+            logger.info("No item found in DynamoDB for user")
             return None
 
+        track_keys = item.get("track_keys", [])
+        logger.info("Loaded %d track keys from DynamoDB, current_index=%s",
+                    len(track_keys), item.get("current_index"))
+
         return {
-            "track_keys": item.get("track_keys", []),
+            "track_keys": track_keys,
             "current_index": int(item.get("current_index", 0)),
             "shuffle_enabled": item.get("shuffle_enabled", False),
             "loop_enabled": item.get("loop_enabled", False),
         }
     except Exception as e:
-        logger.error("Failed to load queue: %s", e)
+        logger.error("Failed to load queue: %s", e, exc_info=True)
         return None
 
 
