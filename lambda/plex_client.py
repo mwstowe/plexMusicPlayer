@@ -73,18 +73,18 @@ class PlexMusicClient:
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.
 
-        Alexa requires HTTPS URLs on port 443. The token is injected
-        server-side by the Apache reverse proxy, so we don't include it
-        in the URL (Alexa may reject URLs with auth tokens in query params).
+        Uses a clean URL pattern /audio/{partId}.mp3 which the Apache
+        reverse proxy rewrites to the full Plex path with auth token.
+        This avoids exposing the token in URLs sent to Alexa.
         """
-        # Direct stream URL without token (proxy adds it)
         if track.media and track.media[0].parts:
             part = track.media[0].parts[0]
-            stream_url = f"{self.base_url}{part.key}"
+            part_id = part.id
+            stream_url = f"{self.base_url}/audio/{part_id}.mp3"
             return stream_url
 
-        # Fallback: use the track key
-        return f"{self.base_url}{track.key}"
+        # Fallback (shouldn't happen for music tracks)
+        return f"{self.base_url}/audio/0.mp3"
 
     def get_track_info(self, track):
         """Extract metadata from a track for Alexa cards/speech."""
