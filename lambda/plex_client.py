@@ -34,17 +34,39 @@ class PlexMusicClient:
         return self._music_library
 
     def search_tracks(self, query):
-        """Search for tracks by title."""
+        """Search for tracks by title.
+
+        Uses Plex's general search which matches against title,
+        artist, and other metadata fields.
+        """
+        # Try exact title search first
         results = self.music_library.searchTracks(title=query)
+        if results:
+            return results
+
+        # Fall back to general search which is more forgiving
+        results = self.music_library.search(query, libtype="track")
         return results
 
     def search_artist(self, artist_name):
-        """Search for an artist and return their tracks."""
+        """Search for an artist and return their tracks.
+
+        Searches both library-level artists (grandparentTitle) and
+        per-track original artists (originalTitle) for compilations
+        and loose files where the folder artist differs from the
+        actual track artist.
+        """
+        # First try library-level artist search
         results = self.music_library.searchArtists(title=artist_name)
-        if not results:
-            return []
-        artist = results[0]
-        return artist.tracks()
+        if results:
+            artist = results[0]
+            tracks = artist.tracks()
+            if tracks:
+                return tracks
+
+        # Fall back to track-level search which matches originalTitle
+        tracks = self.music_library.search(artist_name, libtype="track")
+        return tracks
 
     def search_album(self, album_name, artist_name=None):
         """Search for an album and return its tracks."""
@@ -89,9 +111,12 @@ class PlexMusicClient:
 
     def get_track_info(self, track):
         """Extract metadata from a track for Alexa cards/speech."""
+        # Prefer originalTitle (per-track artist from ID3 tags) over
+        # grandparentTitle (library folder artist, often "Various Artists")
+        artist = track.originalTitle or track.grandparentTitle or "Unknown Artist"
         return {
             "title": track.title,
-            "artist": track.grandparentTitle or "Unknown Artist",
+            "artist": artist,
             "album": track.parentTitle or "Unknown Album",
             "duration_ms": track.duration or 0,
             "art_url": self._get_art_url(track),
