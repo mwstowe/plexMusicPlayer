@@ -15,6 +15,7 @@ from ask_sdk_model.interfaces.audioplayer import (
     AudioItem,
     Stream,
     StopDirective,
+    AudioItemMetadata,
 )
 from ask_sdk_model.ui import StandardCard, Image
 
@@ -41,6 +42,11 @@ def build_audio_play_directive(track, plex, enqueue=False):
 
     play_behavior = PlayBehavior.ENQUEUE if enqueue else PlayBehavior.REPLACE_ALL
 
+    metadata = AudioItemMetadata(
+        title=track_info["title"],
+        subtitle=f"{track_info['artist']} — {track_info['album']}",
+    )
+
     directive = PlayDirective(
         play_behavior=play_behavior,
         audio_item=AudioItem(
@@ -50,7 +56,7 @@ def build_audio_play_directive(track, plex, enqueue=False):
                 offset_in_milliseconds=0,
                 expected_previous_token=None,
             ),
-            metadata=None,
+            metadata=metadata,
         ),
     )
     return directive, track_info
