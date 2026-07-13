@@ -41,7 +41,7 @@ def build_audio_play_directive(track, plex, enqueue=False):
 
     # DEBUG: Use a public test MP3 to verify AudioPlayer works
     # Remove this override once playback is confirmed working
-    stream_url = "https://file-examples.com/storage/fef1706276668c2a220e892/2017/11/file_example_MP3_700KB.mp3"
+    stream_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
     logger.info("DEBUG: Using test URL instead of: %s", plex.get_stream_url(track))
 
     play_behavior = PlayBehavior.ENQUEUE if enqueue else PlayBehavior.REPLACE_ALL
