@@ -48,17 +48,11 @@
             {
               "name": "album",
               "type": "AMAZON.SearchQuery"
-            },
-            {
-              "name": "artist",
-              "type": "AMAZON.SearchQuery"
             }
           ],
           "samples": [
             "play the album {album}",
-            "play album {album}",
-            "play the album {album} by {artist}",
-            "play album {album} by {artist}"
+            "play album {album}"
           ]
         },
         {

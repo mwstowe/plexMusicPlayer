@@ -225,9 +225,7 @@ class PlayAlbumIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         slots = handler_input.request_envelope.request.intent.slots
         album_name = slots.get("album", {})
-        artist_name = slots.get("artist", {})
         album_query = album_name.value if album_name else None
-        artist_query = artist_name.value if artist_name else None
 
         if not album_query:
             return (
@@ -237,6 +235,13 @@ class PlayAlbumIntentHandler(AbstractRequestHandler):
                 .ask("Which album should I play?")
                 .response
             )
+
+        # Parse "Album Name by Artist Name" from the slot value
+        artist_query = None
+        if " by " in album_query.lower():
+            parts = album_query.rsplit(" by ", 1)
+            album_query = parts[0].strip()
+            artist_query = parts[1].strip()
 
         tracks = plex_client.search_album(album_query, artist_query)
         if not tracks:
