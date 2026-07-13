@@ -24,6 +24,8 @@ Globals:
     Timeout: 10
     Runtime: python3.12
     MemorySize: 256
+    Architectures:
+      - arm64
 
 Resources:
   PlexMusicPlayerFunction:

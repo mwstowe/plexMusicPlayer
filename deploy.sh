@@ -30,7 +30,7 @@ fi
 
 # Build the Lambda package
 echo "Building Lambda package..."
-sam build --template-file template.yaml
+sam build --template-file template.yaml --use-container
 
 # Deploy
 echo "Deploying to AWS..."
