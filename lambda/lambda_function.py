@@ -51,6 +51,11 @@ def build_audio_play_directive(track, plex, enqueue=False):
         ) if track_info.get("art_url") else None,
     )
 
+    # For enqueue, set expected_previous_token to the current track
+    expected_previous = None
+    if enqueue and queue.current_track():
+        expected_previous = str(queue.current_track().ratingKey)
+
     directive = PlayDirective(
         play_behavior=play_behavior,
         audio_item=AudioItem(
@@ -58,7 +63,7 @@ def build_audio_play_directive(track, plex, enqueue=False):
                 token=str(track.ratingKey),
                 url=stream_url,
                 offset_in_milliseconds=0,
-                expected_previous_token=None,
+                expected_previous_token=expected_previous,
             ),
             metadata=metadata,
         ),
@@ -326,7 +331,7 @@ class ShuffleAllIntentHandler(AbstractRequestHandler):
             )
 
         queue.load(tracks)
-        queue.shuffle()
+        queue.shuffle_all()
         track = queue.current_track()
         track_info = plex_client.get_track_info(track)
         speech = (
@@ -435,21 +440,36 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
         return is_request_type("AudioPlayer.PlaybackNearlyFinished")(handler_input)
 
     def handle(self, handler_input):
-        next_track = queue.next_track()
-        if not next_track:
+        if not queue.has_next():
             return handler_input.response_builder.response
 
+        # Peek at next track without advancing the index
+        next_index = queue.current_index + 1
+        if next_index >= len(queue.tracks):
+            if queue.loop_enabled:
+                next_index = 0
+            else:
+                return handler_input.response_builder.response
+
+        next_track = queue.tracks[next_index]
         directive, _ = build_audio_play_directive(next_track, plex_client, enqueue=True)
         return handler_input.response_builder.add_directive(directive).response
 
 
 class PlaybackStartedHandler(AbstractRequestHandler):
-    """Handle playback started event."""
+    """Handle playback started event - sync queue position."""
 
     def can_handle(self, handler_input):
         return is_request_type("AudioPlayer.PlaybackStarted")(handler_input)
 
     def handle(self, handler_input):
+        # Sync queue index with what's actually playing
+        token = handler_input.request_envelope.request.token
+        if token and queue.tracks:
+            for i, track in enumerate(queue.tracks):
+                if str(track.ratingKey) == token:
+                    queue.current_index = i
+                    break
         return handler_input.response_builder.response
 
 
@@ -537,13 +557,10 @@ class NextIntentHandler(AbstractRequestHandler):
                     "You've reached the end of the queue."
                 )
                 .add_directive(StopDirective())
-                .set_should_end_session(True)
                 .response
             )
 
-        track_info = plex_client.get_track_info(track)
-        speech = f"Playing {track_info['title']} by {track_info['artist']}."
-        return play_track(handler_input, track, speech)
+        return play_track(handler_input, track)
 
 
 class PreviousIntentHandler(AbstractRequestHandler):

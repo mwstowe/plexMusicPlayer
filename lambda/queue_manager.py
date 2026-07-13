@@ -32,6 +32,15 @@ class PlaybackQueue:
         self.shuffle_enabled = True
         logger.info("Queue shuffled")
 
+    def shuffle_all(self):
+        """Shuffle all tracks including the first one."""
+        if len(self.tracks) <= 1:
+            return
+        random.shuffle(self.tracks)
+        self.current_index = 0
+        self.shuffle_enabled = True
+        logger.info("Full queue shuffled")
+
     def current_track(self):
         """Get the currently playing track."""
         if not self.tracks or self.current_index >= len(self.tracks):
