@@ -126,7 +126,8 @@ class PlexMusicClient:
         }
 
     def _get_art_url(self, track):
-        """Get album art URL for display cards."""
-        if track.thumb:
-            return f"{self.base_url}{track.thumb}?X-Plex-Token={self.token}"
+        """Get album art URL via CloudFront for Alexa display."""
+        thumb = track.thumb or track.parentThumb or track.grandparentThumb
+        if thumb:
+            return f"{self.stream_base_url}{thumb}?X-Plex-Token={self.token}"
         return None

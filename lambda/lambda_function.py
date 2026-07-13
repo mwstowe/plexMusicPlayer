@@ -17,6 +17,7 @@ from ask_sdk_model.interfaces.audioplayer import (
     StopDirective,
     AudioItemMetadata,
 )
+from ask_sdk_model.interfaces.display import Image as DisplayImage, ImageInstance
 from ask_sdk_model.ui import StandardCard, Image
 
 from plex_client import PlexMusicClient
@@ -45,6 +46,9 @@ def build_audio_play_directive(track, plex, enqueue=False):
     metadata = AudioItemMetadata(
         title=track_info["title"],
         subtitle=f"{track_info['artist']} — {track_info['album']}",
+        art=DisplayImage(
+            sources=[ImageInstance(url=track_info["art_url"])]
+        ) if track_info.get("art_url") else None,
     )
 
     directive = PlayDirective(
