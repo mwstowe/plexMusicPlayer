@@ -539,6 +539,14 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
 
         next_track = queue.tracks[next_index]
         directive, _ = build_audio_play_directive(next_track, plex_client, enqueue=True)
+
+        # Update DynamoDB to reflect that the next track will be playing
+        # This is critical for cold-start recovery
+        real_next_index = next_index + getattr(queue, '_base_index', 0)
+        user_id = get_user_id(handler_input)
+        queue_persistence.update_index(user_id, real_next_index)
+        logger.info("Enqueued next track, updated DynamoDB index to %d", real_next_index)
+
         return handler_input.response_builder.add_directive(directive).response
 
 
