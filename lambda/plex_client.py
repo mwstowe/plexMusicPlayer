@@ -96,18 +96,17 @@ class PlexMusicClient:
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.
 
-        Uses STREAM_BASE_URL (CloudFront) for the audio URL that Alexa
-        fetches. The /audio/{partId}.mp3 path is rewritten by the Apache
-        proxy behind CloudFront to the actual Plex file path with auth.
+        Uses CloudFront (STREAM_BASE_URL) as the CDN in front of Plex.
+        CloudFront connects to Plex on port 32400, and the Plex token
+        is passed as a query parameter for authentication.
         """
         if track.media and track.media[0].parts:
             part = track.media[0].parts[0]
-            part_id = part.id
-            stream_url = f"{self.stream_base_url}/audio/{part_id}.mp3"
+            stream_url = f"{self.stream_base_url}{part.key}?X-Plex-Token={self.token}"
             return stream_url
 
         # Fallback (shouldn't happen for music tracks)
-        return f"{self.stream_base_url}/audio/0.mp3"
+        return f"{self.stream_base_url}{track.key}?X-Plex-Token={self.token}"
 
     def get_track_info(self, track):
         """Extract metadata from a track for Alexa cards/speech."""
