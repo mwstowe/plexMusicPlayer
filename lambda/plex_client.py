@@ -73,35 +73,18 @@ class PlexMusicClient:
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.
 
-        Alexa requires HTTPS URLs. The URL includes transcoding parameters
-        to ensure the output is MP3 (which Alexa supports natively).
+        Alexa requires HTTPS URLs on port 443. The token is injected
+        server-side by the Apache reverse proxy, so we don't include it
+        in the URL (Alexa may reject URLs with auth tokens in query params).
         """
-        # Use Plex's built-in transcoding to ensure MP3 output
-        params = {
-            "X-Plex-Token": self.token,
-            "X-Plex-Platform": "Chrome",
-            "path": track.key,
-            "mediaIndex": 0,
-            "partIndex": 0,
-            "protocol": "http",
-            "offset": 0,
-        }
-
-        # If the track is already MP3, use direct stream
+        # Direct stream URL without token (proxy adds it)
         if track.media and track.media[0].parts:
             part = track.media[0].parts[0]
-            container = track.media[0].container
-            if container in ("mp3", "aac", "mp4"):
-                # Direct stream URL
-                stream_url = f"{self.base_url}{part.key}?X-Plex-Token={self.token}"
-                return stream_url
+            stream_url = f"{self.base_url}{part.key}"
+            return stream_url
 
-        # Otherwise, use Plex transcoder to convert to MP3
-        transcode_url = (
-            f"{self.base_url}/music/:/transcode/universal/start.mp3?"
-            f"{urlencode(params)}"
-        )
-        return transcode_url
+        # Fallback: use the track key
+        return f"{self.base_url}{track.key}"
 
     def get_track_info(self, track):
         """Extract metadata from a track for Alexa cards/speech."""
