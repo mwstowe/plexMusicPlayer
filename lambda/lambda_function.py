@@ -40,7 +40,11 @@ def get_user_id(handler_input):
 
 
 def restore_queue_if_empty(handler_input):
-    """Restore the queue from DynamoDB if it's empty (cold start)."""
+    """Restore the queue from DynamoDB if it's empty (cold start).
+
+    Only fetches track metadata for the current and next few tracks
+    to avoid timeout when the queue is large.
+    """
     if queue.tracks:
         return True
 
@@ -49,15 +53,27 @@ def restore_queue_if_empty(handler_input):
     if not saved or not saved["track_keys"]:
         return False
 
-    tracks = plex_client.get_tracks_by_keys(saved["track_keys"])
+    # Store the raw keys in the queue for later use
+    # but only fetch metadata for tracks we need right now
+    track_keys = saved["track_keys"]
+    current_idx = min(saved["current_index"], len(track_keys) - 1)
+
+    # Fetch current track and next 2 tracks (enough for enqueue)
+    keys_to_fetch = track_keys[current_idx:current_idx + 3]
+    tracks = plex_client.get_tracks_by_keys(keys_to_fetch)
     if not tracks:
         return False
 
+    # Build a minimal queue with just the fetched tracks
+    # but store all keys so we know total size
     queue.tracks = tracks
-    queue.current_index = min(saved["current_index"], len(tracks) - 1)
+    queue.current_index = 0
     queue.shuffle_enabled = saved["shuffle_enabled"]
     queue.loop_enabled = saved["loop_enabled"]
-    logger.info("Restored queue: %d tracks, index %d", len(tracks), queue.current_index)
+    queue._all_keys = track_keys
+    queue._base_index = current_idx
+    logger.info("Restored queue: %d total tracks, fetched %d, at index %d",
+                len(track_keys), len(tracks), current_idx)
     return True
 
 
@@ -480,13 +496,32 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
         # Restore queue from DynamoDB if Lambda cold-started
         restore_queue_if_empty(handler_input)
 
-        if not queue.has_next():
-            return handler_input.response_builder.response
-
-        # Peek at next track without advancing the index
+        # Check if there's a next track available
         next_index = queue.current_index + 1
         if next_index >= len(queue.tracks):
-            if queue.loop_enabled:
+            # If we have more keys than loaded tracks, fetch the next one
+            if hasattr(queue, '_all_keys') and queue._all_keys:
+                real_next = queue._base_index + next_index
+                if real_next < len(queue._all_keys):
+                    next_tracks = plex_client.get_tracks_by_keys(
+                        [queue._all_keys[real_next]]
+                    )
+                    if next_tracks:
+                        queue.tracks.append(next_tracks[0])
+                    else:
+                        return handler_input.response_builder.response
+                elif queue.loop_enabled:
+                    # Loop back to beginning
+                    next_tracks = plex_client.get_tracks_by_keys(
+                        [queue._all_keys[0]]
+                    )
+                    if next_tracks:
+                        queue.tracks.append(next_tracks[0])
+                    else:
+                        return handler_input.response_builder.response
+                else:
+                    return handler_input.response_builder.response
+            elif queue.loop_enabled and queue.tracks:
                 next_index = 0
             else:
                 return handler_input.response_builder.response
@@ -512,9 +547,10 @@ class PlaybackStartedHandler(AbstractRequestHandler):
             for i, track in enumerate(queue.tracks):
                 if str(track.ratingKey) == token:
                     queue.current_index = i
-                    # Persist the updated index
+                    # Persist the real index (accounting for partial restore offset)
+                    real_index = i + getattr(queue, '_base_index', 0)
                     user_id = get_user_id(handler_input)
-                    queue_persistence.update_index(user_id, i)
+                    queue_persistence.update_index(user_id, real_index)
                     break
         return handler_input.response_builder.response
 
