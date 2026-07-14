@@ -145,3 +145,31 @@ class PlexMusicClient:
         if thumb:
             return f"{self.stream_base_url}{thumb}?X-Plex-Token={self.token}"
         return None
+
+    def report_playback(self, track, state="playing", time_ms=0):
+        """Report playback state to Plex timeline API.
+
+        This makes Plex aware of what's playing (shows in Now Playing,
+        Tautulli, etc.)
+
+        Args:
+            track: The track object being played
+            state: One of 'playing', 'paused', 'stopped'
+            time_ms: Current playback position in milliseconds
+        """
+        try:
+            params = {
+                "ratingKey": track.ratingKey,
+                "key": track.key,
+                "state": state,
+                "time": time_ms,
+                "duration": track.duration or 0,
+                "X-Plex-Client-Identifier": "plexMusicPlayer-alexa",
+                "X-Plex-Product": "Plex Music Player",
+                "X-Plex-Device": "Alexa",
+                "X-Plex-Token": self.token,
+            }
+            self.server.query(f"/:/timeline?{urlencode(params)}")
+            logger.info("Reported timeline: %s state=%s", track.title, state)
+        except Exception as e:
+            logger.warning("Failed to report timeline: %s", e)

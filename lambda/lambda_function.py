@@ -570,6 +570,8 @@ class PlaybackStartedHandler(AbstractRequestHandler):
                     real_index = i + getattr(queue, '_base_index', 0)
                     user_id = get_user_id(handler_input)
                     queue_persistence.update_index(user_id, real_index)
+                    # Report to Plex that playback started
+                    plex_client.report_playback(track, state="playing")
                     break
         return handler_input.response_builder.response
 
@@ -581,6 +583,11 @@ class PlaybackStoppedHandler(AbstractRequestHandler):
         return is_request_type("AudioPlayer.PlaybackStopped")(handler_input)
 
     def handle(self, handler_input):
+        # Report to Plex that playback stopped
+        track = queue.current_track()
+        if track:
+            offset = getattr(handler_input.request_envelope.request, 'offset_in_milliseconds', 0) or 0
+            plex_client.report_playback(track, state="stopped", time_ms=offset)
         return handler_input.response_builder.response
 
 
