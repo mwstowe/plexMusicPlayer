@@ -284,8 +284,7 @@ For personal use, this should remain within the free tier indefinitely.
 
 ## Limitations
 
-- **No multi-user support** — uses a single Plex token (designed for personal use)
-- **No persistent queue** — the playback queue resets if Lambda cold-starts mid-playback (for production use, add DynamoDB persistence)
+- **No multi-room audio** — cannot move playback between Alexa devices (Music Skill API limitation)
 - **Single music library** — searches one library section at a time
 - **MP3/AAC only** — FLAC and other formats require transcoding (not yet implemented)
 
