@@ -59,8 +59,8 @@ curl -s "https://plex.tv/api/resources?X-Plex-Token=YOUR_TOKEN" | grep -o 'uri="
 ```
 
 Or construct it from your Plex server's `Preferences.xml`:
-- Find `CertificateUUID` (e.g., `YOUR-PLEX-CERT-UUID`)
-- Your public IP with dashes (e.g., `YOUR.PUBLIC.IP` → `YOUR-PUBLIC-IP`)
+- Find `CertificateUUID` (e.g., `abc123def456abc123def456abc123de`)
+- Your public IP with dashes (e.g., `192.168.1.100` → `192-168-1-100`)
 - URL format: `https://{IP-WITH-DASHES}.{CERTIFICATE-UUID}.plex.direct:32400`
 
 ### 3. Create CloudFront Distribution
@@ -134,7 +134,7 @@ After deployment, set the `STREAM_BASE_URL` environment variable on the Lambda:
 aws lambda update-function-configuration \
   --function-name plexMusicPlayer \
   --region us-east-1 \
-  --environment "Variables={PLEX_URL=$PLEX_URL,PLEX_TOKEN=$PLEX_TOKEN,PLEX_MUSIC_LIBRARY=$PLEX_MUSIC_LIBRARY,STREAM_BASE_URL=https://YOUR-CLOUDFRONT-DOMAIN.cloudfront.net}"
+  --environment "Variables={PLEX_URL=$PLEX_URL,PLEX_TOKEN=$PLEX_TOKEN,PLEX_MUSIC_LIBRARY=$PLEX_MUSIC_LIBRARY,STREAM_BASE_URL=https://YOUR-CLOUDFRONT-DOMAIN.cloudfront.net,QUEUE_TABLE=plexMusicPlayer-queue}"
 ```
 
 ### 6. Connect the Skill to Lambda
@@ -218,6 +218,7 @@ plexMusicPlayer/
 | `PLEX_TOKEN` | Yes | Your Plex authentication token |
 | `PLEX_MUSIC_LIBRARY` | No | Name of your music library section (default: `Music`) |
 | `STREAM_BASE_URL` | Yes | Your CloudFront domain (e.g., `https://d1234abcdef.cloudfront.net`) |
+| `QUEUE_TABLE` | No | DynamoDB table name for queue persistence (default: `plexMusicPlayer-queue`, auto-created by SAM) |
 
 ## Troubleshooting
 
