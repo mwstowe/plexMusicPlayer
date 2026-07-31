@@ -3,28 +3,97 @@
 import logging
 import os
 from urllib.parse import urlencode
+from xml.etree import ElementTree
 
+import requests
 from plexapi.server import PlexServer
 from plexapi.exceptions import NotFound
 
 logger = logging.getLogger(__name__)
+
+PLEX_TV_RESOURCES_URL = "https://plex.tv/api/resources"
+
+
+def resolve_plex_url(token, timeout=5):
+    """Resolve the Plex server URL dynamically via plex.tv API.
+
+    Queries plex.tv/api/resources?includeHttps=1 to find the server's
+    current connection URI. Prefers the remote (local="0") HTTPS
+    .plex.direct connection, which tracks the server's current public IP.
+
+    Returns the best available URL, or None if resolution fails.
+    """
+    try:
+        resp = requests.get(
+            PLEX_TV_RESOURCES_URL,
+            params={"X-Plex-Token": token, "includeHttps": "1"},
+            headers={"Accept": "application/xml"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+
+        root = ElementTree.fromstring(resp.text)
+
+        # Find server devices (product="Plex Media Server")
+        for device in root.findall("./Device[@product='Plex Media Server']"):
+            connections = device.findall(".//Connection")
+
+            # First pass: remote HTTPS .plex.direct connection (ideal for Lambda)
+            for conn in connections:
+                uri = conn.get("uri", "")
+                if (conn.get("protocol") == "https"
+                        and conn.get("local") == "0"
+                        and "plex.direct" in uri):
+                    logger.info("Resolved Plex URL via plex.tv: %s", uri)
+                    return uri
+
+            # Second pass: any remote HTTPS connection
+            for conn in connections:
+                uri = conn.get("uri", "")
+                if (conn.get("protocol") == "https"
+                        and conn.get("local") == "0"):
+                    logger.info("Resolved Plex URL via plex.tv (non-direct): %s", uri)
+                    return uri
+
+        logger.warning("No suitable Plex server connection found in plex.tv response")
+        return None
+
+    except Exception as e:
+        logger.warning("Failed to resolve Plex URL from plex.tv: %s", e)
+        return None
 
 
 class PlexMusicClient:
     """Client for interacting with Plex music libraries."""
 
     def __init__(self, base_url=None, token=None, library_name=None):
-        self.base_url = base_url or os.environ["PLEX_URL"]
         self.token = token or os.environ["PLEX_TOKEN"]
+        self.base_url = base_url or self._resolve_base_url()
         self.library_name = library_name or os.environ.get("PLEX_MUSIC_LIBRARY", "Music")
         self.stream_base_url = os.environ.get("STREAM_BASE_URL", self.base_url)
         self._server = None
         self._music_library = None
 
+    def _resolve_base_url(self):
+        """Resolve the Plex server URL, trying plex.tv first, then env var fallback."""
+        resolved = resolve_plex_url(self.token)
+        if resolved:
+            return resolved
+
+        plex_url = os.environ.get("PLEX_URL")
+        if plex_url:
+            logger.info("Using PLEX_URL env var as fallback: %s", plex_url)
+            return plex_url
+
+        raise ValueError(
+            "Cannot determine Plex server URL: plex.tv resolution failed "
+            "and PLEX_URL environment variable is not set"
+        )
+
     @property
     def server(self):
         if self._server is None:
-            self._server = PlexServer(self.base_url, self.token)
+            self._server = PlexServer(self.base_url, self.token, timeout=8)
         return self._server
 
     @property
@@ -98,18 +167,33 @@ class PlexMusicClient:
         return self.music_library.searchTracks()
 
     def get_tracks_by_keys(self, rating_keys):
-        """Fetch tracks by their rating keys (for queue restoration)."""
-        tracks = []
-        for key in rating_keys:
-            try:
-                results = self.server.fetchItems(f"/library/metadata/{key}")
-                if results:
-                    tracks.append(results[0])
-            except Exception as e:
-                logger.error("Failed to fetch track %s: %s", key, e)
-                continue
-        logger.info("get_tracks_by_keys: requested %d, got %d", len(rating_keys), len(tracks))
-        return tracks
+        """Fetch tracks by their rating keys (for queue restoration).
+
+        Uses Plex's batch metadata endpoint to fetch multiple tracks
+        in a single HTTP request: /library/metadata/key1,key2,key3
+        """
+        if not rating_keys:
+            return []
+
+        try:
+            key_path = ",".join(str(k) for k in rating_keys)
+            results = self.server.fetchItems(f"/library/metadata/{key_path}")
+            logger.info("get_tracks_by_keys: requested %d, got %d", len(rating_keys), len(results))
+            return results
+        except Exception as e:
+            logger.error("Batch fetch failed for %d keys: %s", len(rating_keys), e)
+            # Fall back to one-at-a-time fetch
+            tracks = []
+            for key in rating_keys:
+                try:
+                    results = self.server.fetchItems(f"/library/metadata/{key}")
+                    if results:
+                        tracks.append(results[0])
+                except Exception as inner_e:
+                    logger.error("Failed to fetch track %s: %s", key, inner_e)
+                    continue
+            logger.info("get_tracks_by_keys (fallback): requested %d, got %d", len(rating_keys), len(tracks))
+            return tracks
 
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.

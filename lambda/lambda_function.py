@@ -29,7 +29,7 @@ logger.setLevel(logging.INFO)
 
 # Global state (persists across warm Lambda invocations)
 plex_client = PlexMusicClient()
-queue = PlaybackQueue()
+_queues = {}  # user_id -> PlaybackQueue (scoped per user)
 
 sb = SkillBuilder()
 
@@ -39,12 +39,21 @@ def get_user_id(handler_input):
     return handler_input.request_envelope.context.system.user.user_id
 
 
+def get_queue(handler_input):
+    """Get the PlaybackQueue for the current user, creating if needed."""
+    user_id = get_user_id(handler_input)
+    if user_id not in _queues:
+        _queues[user_id] = PlaybackQueue()
+    return _queues[user_id]
+
+
 def restore_queue_if_empty(handler_input):
     """Restore the queue from DynamoDB if it's empty (cold start).
 
     Only fetches track metadata for the current and next few tracks
     to avoid timeout when the queue is large.
     """
+    queue = get_queue(handler_input)
     if queue.tracks:
         return True
 
@@ -55,8 +64,6 @@ def restore_queue_if_empty(handler_input):
         logger.info("No saved queue found in DynamoDB")
         return False
 
-    # Store the raw keys in the queue for later use
-    # but only fetch metadata for tracks we need right now
     track_keys = saved["track_keys"]
     current_idx = min(saved["current_index"], len(track_keys) - 1)
 
@@ -66,30 +73,33 @@ def restore_queue_if_empty(handler_input):
     if not tracks:
         return False
 
-    # Build a minimal queue with just the fetched tracks
-    # but store all keys so we know total size
-    queue.tracks = tracks
-    queue.current_index = 0
-    queue.shuffle_enabled = saved["shuffle_enabled"]
-    queue.loop_enabled = saved["loop_enabled"]
-    queue._all_keys = track_keys
-    queue._base_index = current_idx
+    queue.load_from_keys(
+        all_keys=track_keys,
+        current_index=current_idx,
+        tracks=tracks,
+        shuffle_enabled=saved["shuffle_enabled"],
+        loop_enabled=saved["loop_enabled"],
+    )
+    queue.pause_offset_ms = saved.get("pause_offset_ms", 0)
     logger.info("Restored queue: %d total tracks, fetched %d, at index %d",
                 len(track_keys), len(tracks), current_idx)
     return True
 
 
-def save_queue_state(handler_input):
+def save_queue_state(user_id):
     """Save the current queue to DynamoDB."""
-    user_id = get_user_id(handler_input)
-    logger.info("Saving queue for user: %s, tracks: %d", user_id[:20] if user_id else "None", len(queue.tracks))
+    if user_id not in _queues:
+        return
+    queue = _queues[user_id]
+    logger.info("Saving queue for user: %s, tracks: %d",
+                user_id[:20] if user_id else "None", queue.total_tracks)
     queue_persistence.save_queue(user_id, queue)
 
 
 # --- Helper Functions ---
 
 
-def build_audio_play_directive(track, plex, enqueue=False):
+def build_audio_play_directive(track, plex, queue, enqueue=False, offset_ms=0, expected_previous_token=None):
     """Build an AudioPlayer.Play directive for a given track."""
     stream_url = plex.get_stream_url(track)
     track_info = plex.get_track_info(track)
@@ -104,10 +114,10 @@ def build_audio_play_directive(track, plex, enqueue=False):
         ) if track_info.get("art_url") else None,
     )
 
-    # For enqueue, set expected_previous_token to the current track
-    expected_previous = None
-    if enqueue and queue.current_track():
-        expected_previous = str(queue.current_track().ratingKey)
+    # For enqueue, expected_previous_token tells Alexa which track this follows.
+    # If not explicitly provided, fall back to the current track's token.
+    if enqueue and expected_previous_token is None and queue.current_track():
+        expected_previous_token = str(queue.current_track().ratingKey)
 
     directive = PlayDirective(
         play_behavior=play_behavior,
@@ -115,8 +125,8 @@ def build_audio_play_directive(track, plex, enqueue=False):
             stream=Stream(
                 token=str(track.ratingKey),
                 url=stream_url,
-                offset_in_milliseconds=0,
-                expected_previous_token=expected_previous,
+                offset_in_milliseconds=offset_ms,
+                expected_previous_token=expected_previous_token if enqueue else None,
             ),
             metadata=metadata,
         ),
@@ -135,9 +145,17 @@ def build_card(track_info, plex):
     )
 
 
-def play_track(handler_input, track, speech_text=None):
-    """Play a track and return the response."""
-    directive, track_info = build_audio_play_directive(track, plex_client)
+def play_track(handler_input, track, speech_text=None, offset_ms=0):
+    """Play a track and return the response.
+
+    Args:
+        handler_input: The Alexa handler input.
+        track: The track object to play.
+        speech_text: Optional speech to say before playback starts.
+        offset_ms: Offset in milliseconds to start playback from.
+    """
+    queue = get_queue(handler_input)
+    directive, track_info = build_audio_play_directive(track, plex_client, queue, offset_ms=offset_ms)
 
     stream_url = plex_client.get_stream_url(track)
     logger.info(
@@ -148,10 +166,14 @@ def play_track(handler_input, track, speech_text=None):
     )
 
     # Persist queue state
-    save_queue_state(handler_input)
+    user_id = get_user_id(handler_input)
+    save_queue_state(user_id)
 
     response_builder = handler_input.response_builder
+    if speech_text:
+        response_builder.speak(speech_text)
     response_builder.add_directive(directive)
+    response_builder.set_should_end_session(True)
 
     return response_builder.response
 
@@ -197,6 +219,8 @@ class PlaySongIntentHandler(AbstractRequestHandler):
                 .ask("What would you like me to play?")
                 .response
             )
+
+        queue = get_queue(handler_input)
 
         # Try song first
         tracks = plex_client.search_tracks(song_query)
@@ -270,6 +294,7 @@ class PlayArtistIntentHandler(AbstractRequestHandler):
                 .response
             )
 
+        queue = get_queue(handler_input)
         queue.load(tracks)
         track = queue.current_track()
         track_info = plex_client.get_track_info(track)
@@ -318,6 +343,7 @@ class PlayAlbumIntentHandler(AbstractRequestHandler):
                 .response
             )
 
+        queue = get_queue(handler_input)
         queue.load(tracks)
         track = queue.current_track()
         track_info = plex_client.get_track_info(track)
@@ -359,6 +385,7 @@ class PlayPlaylistIntentHandler(AbstractRequestHandler):
                 .response
             )
 
+        queue = get_queue(handler_input)
         queue.load(tracks)
         track = queue.current_track()
         track_info = plex_client.get_track_info(track)
@@ -386,6 +413,7 @@ class ShuffleAllIntentHandler(AbstractRequestHandler):
                 .response
             )
 
+        queue = get_queue(handler_input)
         queue.load(tracks)
         queue.shuffle_all()
         track = queue.current_track()
@@ -405,6 +433,8 @@ class NowPlayingIntentHandler(AbstractRequestHandler):
         return is_intent_name("NowPlayingIntent")(handler_input)
 
     def handle(self, handler_input):
+        restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
         track = queue.current_track()
         if not track:
             return (
@@ -433,7 +463,10 @@ class ShuffleOnIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.ShuffleOnIntent")(handler_input)
 
     def handle(self, handler_input):
+        queue = get_queue(handler_input)
         queue.shuffle()
+        user_id = get_user_id(handler_input)
+        save_queue_state(user_id)
         return (
             handler_input.response_builder.speak("Shuffle is now on.")
             .set_should_end_session(True)
@@ -448,7 +481,10 @@ class ShuffleOffIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.ShuffleOffIntent")(handler_input)
 
     def handle(self, handler_input):
+        queue = get_queue(handler_input)
         queue.shuffle_enabled = False
+        user_id = get_user_id(handler_input)
+        save_queue_state(user_id)
         return (
             handler_input.response_builder.speak("Shuffle is now off.")
             .set_should_end_session(True)
@@ -463,7 +499,10 @@ class LoopOnIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.LoopOnIntent")(handler_input)
 
     def handle(self, handler_input):
+        queue = get_queue(handler_input)
         queue.loop_enabled = True
+        user_id = get_user_id(handler_input)
+        save_queue_state(user_id)
         return (
             handler_input.response_builder.speak("Loop mode is now on.")
             .set_should_end_session(True)
@@ -478,7 +517,10 @@ class LoopOffIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.LoopOffIntent")(handler_input)
 
     def handle(self, handler_input):
+        queue = get_queue(handler_input)
         queue.loop_enabled = False
+        user_id = get_user_id(handler_input)
+        save_queue_state(user_id)
         return (
             handler_input.response_builder.speak("Loop mode is now off.")
             .set_should_end_session(True)
@@ -497,52 +539,67 @@ class PlaybackNearlyFinishedHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # Restore queue from DynamoDB if Lambda cold-started
-        restored = restore_queue_if_empty(handler_input)
+        restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
         logger.info(
-            "PlaybackNearlyFinished: restored=%s, queue_size=%d, current_index=%d, has_all_keys=%s",
-            restored, len(queue.tracks), queue.current_index,
-            hasattr(queue, '_all_keys') and bool(queue._all_keys)
+            "PlaybackNearlyFinished: queue_size=%d, current_index=%d, total=%d",
+            len(queue.tracks), queue.current_index, queue.total_tracks
         )
 
-        # Check if there's a next track available
+        # The token from the request is the track currently playing —
+        # this must be used as expected_previous_token for the enqueue directive.
+        current_token = handler_input.request_envelope.request.token
+
+        # Determine the next track to enqueue
         next_index = queue.current_index + 1
-        if next_index >= len(queue.tracks):
-            # If we have more keys than loaded tracks, fetch the next one
-            if hasattr(queue, '_all_keys') and queue._all_keys:
-                real_next = queue._base_index + next_index
-                logger.info("Need to fetch track at real_next=%d, total_keys=%d", real_next, len(queue._all_keys))
-                if real_next < len(queue._all_keys):
-                    next_tracks = plex_client.get_tracks_by_keys(
-                        [queue._all_keys[real_next]]
-                    )
-                    if next_tracks:
-                        queue.tracks.append(next_tracks[0])
-                    else:
-                        logger.info("Failed to fetch next track")
-                        return handler_input.response_builder.response
-                elif queue.loop_enabled:
-                    next_tracks = plex_client.get_tracks_by_keys(
-                        [queue._all_keys[0]]
-                    )
-                    if next_tracks:
-                        queue.tracks.append(next_tracks[0])
-                    else:
-                        return handler_input.response_builder.response
-                else:
-                    logger.info("No more tracks and loop disabled")
-                    return handler_input.response_builder.response
-            elif queue.loop_enabled and queue.tracks:
-                next_index = 0
-            else:
-                logger.info("No next track available, no _all_keys")
+        if next_index < len(queue.tracks):
+            # Next track already loaded in memory
+            next_track = queue.tracks[next_index]
+        elif queue.has_next_key():
+            # Need to fetch the next track from Plex
+            next_rating_key = queue.next_key()
+            logger.info("Fetching next track key=%s", next_rating_key)
+            next_tracks = plex_client.get_tracks_by_keys([next_rating_key])
+            if not next_tracks:
+                logger.info("Failed to fetch next track")
                 return handler_input.response_builder.response
+            queue.tracks.append(next_tracks[0])
+            next_track = next_tracks[0]
+        elif queue.loop_enabled and queue.all_keys:
+            # Loop back to the beginning
+            first_key = queue.all_keys[0]
+            next_tracks = plex_client.get_tracks_by_keys([first_key])
+            if not next_tracks:
+                return handler_input.response_builder.response
+            queue.tracks.append(next_tracks[0])
+            next_track = next_tracks[0]
+        elif queue.loop_enabled and queue.tracks:
+            # No all_keys, just loop the loaded tracks
+            next_track = queue.tracks[0]
+            next_index = 0
+        else:
+            logger.info("No more tracks to enqueue")
+            return handler_input.response_builder.response
 
-        next_track = queue.tracks[next_index]
-        directive, _ = build_audio_play_directive(next_track, plex_client, enqueue=True)
+        directive, _ = build_audio_play_directive(
+            next_track, plex_client, queue,
+            enqueue=True,
+            expected_previous_token=current_token,
+        )
 
-        # Update DynamoDB to reflect that the next track will be playing
-        # This is critical for cold-start recovery
-        real_next_index = next_index + getattr(queue, '_base_index', 0)
+        # Update DynamoDB index to reflect the upcoming track
+        if queue.loop_enabled and next_index == 0:
+            # Looping back to the start
+            real_next_index = 0
+        elif queue.loop_enabled and queue.all_keys and next_index >= len(queue.tracks) - 1:
+            # We appended a looped track (all_keys[0]) — real index is 0
+            # Check if the next_track's key matches all_keys[0]
+            if str(next_track.ratingKey) == queue.all_keys[0]:
+                real_next_index = 0
+            else:
+                real_next_index = queue.base_index + next_index
+        else:
+            real_next_index = queue.base_index + next_index
         user_id = get_user_id(handler_input)
         queue_persistence.update_index(user_id, real_next_index)
         logger.info("Enqueued next track, updated DynamoDB index to %d", real_next_index)
@@ -557,36 +614,40 @@ class PlaybackStartedHandler(AbstractRequestHandler):
         return is_request_type("AudioPlayer.PlaybackStarted")(handler_input)
 
     def handle(self, handler_input):
-        # Restore queue if needed
         restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
 
         # Sync queue index with what's actually playing
         token = handler_input.request_envelope.request.token
         if token and queue.tracks:
-            for i, track in enumerate(queue.tracks):
-                if str(track.ratingKey) == token:
-                    queue.current_index = i
-                    # Persist the real index (accounting for partial restore offset)
-                    real_index = i + getattr(queue, '_base_index', 0)
-                    user_id = get_user_id(handler_input)
-                    queue_persistence.update_index(user_id, real_index)
-                    # Report to Plex that playback started
-                    plex_client.report_playback(track, state="playing")
-                    break
+            idx = queue.find_track_index(token)
+            if idx >= 0:
+                queue.current_index = idx
+                queue.pause_offset_ms = 0
+                real_index = idx + queue.base_index
+                user_id = get_user_id(handler_input)
+                queue_persistence.update_index(user_id, real_index, pause_offset_ms=0)
+                plex_client.report_playback(queue.tracks[idx], state="playing")
         return handler_input.response_builder.response
 
 
 class PlaybackStoppedHandler(AbstractRequestHandler):
-    """Handle playback stopped event."""
+    """Handle playback stopped event — persist pause offset for resume."""
 
     def can_handle(self, handler_input):
         return is_request_type("AudioPlayer.PlaybackStopped")(handler_input)
 
     def handle(self, handler_input):
-        # Report to Plex that playback stopped
+        queue = get_queue(handler_input)
+        offset = getattr(handler_input.request_envelope.request, 'offset_in_milliseconds', 0) or 0
+        queue.pause_offset_ms = offset
+
+        # Persist offset to DynamoDB so resume works after cold start
+        user_id = get_user_id(handler_input)
+        queue_persistence.update_index(user_id, queue.absolute_index, pause_offset_ms=offset)
+
         track = queue.current_track()
         if track:
-            offset = getattr(handler_input.request_envelope.request, 'offset_in_milliseconds', 0) or 0
             plex_client.report_playback(track, state="stopped", time_ms=offset)
         return handler_input.response_builder.response
 
@@ -602,17 +663,25 @@ class PlaybackFinishedHandler(AbstractRequestHandler):
 
 
 class PlaybackFailedHandler(AbstractRequestHandler):
-    """Handle playback failure."""
+    """Handle playback failure.
+
+    Note: AudioPlayer event responses cannot include speech output.
+    We log the error and stop cleanly. The user will notice silence
+    and can retry with a voice command.
+    """
 
     def can_handle(self, handler_input):
         return is_request_type("AudioPlayer.PlaybackFailed")(handler_input)
 
     def handle(self, handler_input):
-        logger.error(
-            "Playback failed: %s",
-            handler_input.request_envelope.request,
+        request = handler_input.request_envelope.request
+        logger.error("Playback failed: %s", request)
+
+        # AudioPlayer responses cannot speak — just stop cleanly
+        return (
+            handler_input.response_builder.add_directive(StopDirective())
+            .response
         )
-        return handler_input.response_builder.response
 
 
 # --- Built-in Playback Control Intents ---
@@ -639,6 +708,8 @@ class ResumeIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.ResumeIntent")(handler_input)
 
     def handle(self, handler_input):
+        restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
         track = queue.current_track()
         if not track:
             return (
@@ -648,7 +719,7 @@ class ResumeIntentHandler(AbstractRequestHandler):
                 .ask("What would you like to listen to?")
                 .response
             )
-        return play_track(handler_input, track)
+        return play_track(handler_input, track, offset_ms=queue.pause_offset_ms)
 
 
 class NextIntentHandler(AbstractRequestHandler):
@@ -659,14 +730,25 @@ class NextIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
 
         track = queue.next_track()
+        if not track:
+            # next_track() returned None — check if we can fetch more
+            if queue.has_next_key():
+                next_key = queue.next_key()
+                next_tracks = plex_client.get_tracks_by_keys([next_key])
+                if next_tracks:
+                    queue.append_and_advance(next_tracks[0])
+                    track = next_tracks[0]
+
         if not track:
             return (
                 handler_input.response_builder.speak(
                     "You've reached the end of the queue."
                 )
                 .add_directive(StopDirective())
+                .set_should_end_session(True)
                 .response
             )
 
@@ -681,6 +763,7 @@ class PreviousIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
 
         track = queue.previous_track()
         if not track:
@@ -704,6 +787,7 @@ class StartOverIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.StartOverIntent")(handler_input)
 
     def handle(self, handler_input):
+        queue = get_queue(handler_input)
         if not queue.tracks:
             return (
                 handler_input.response_builder.speak(
@@ -714,6 +798,7 @@ class StartOverIntentHandler(AbstractRequestHandler):
             )
 
         queue.current_index = 0
+        queue.pause_offset_ms = 0
         track = queue.current_track()
         track_info = plex_client.get_track_info(track)
         speech = f"Starting over. Playing {track_info['title']} by {track_info['artist']}."
@@ -796,7 +881,27 @@ class GlobalExceptionHandler(AbstractExceptionHandler):
 
     def handle(self, handler_input, exception):
         logger.error("Unhandled exception: %s", exception, exc_info=True)
-        speech = "Sorry, something went wrong connecting to your Plex server. Please try again."
+
+        error_str = str(exception).lower()
+        if "name resolution" in error_str or "failed to resolve" in error_str:
+            speech = (
+                "I can't reach your Plex server right now. "
+                "It may be temporarily offline or having a network issue. "
+                "Please try again in a minute."
+            )
+        elif "connection" in error_str or "timeout" in error_str or "timed out" in error_str:
+            speech = (
+                "Your Plex server isn't responding. "
+                "Please check that it's running and try again."
+            )
+        elif "ssl" in error_str or "certificate" in error_str:
+            speech = (
+                "There's a certificate error connecting to your Plex server. "
+                "The server's address may have changed. Please try again later."
+            )
+        else:
+            speech = "Sorry, something went wrong. Please try again."
+
         return (
             handler_input.response_builder.speak(speech)
             .ask("Would you like to try again?")

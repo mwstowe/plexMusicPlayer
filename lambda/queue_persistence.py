@@ -22,8 +22,12 @@ def save_queue(user_id, queue):
 
     Stores track rating keys (not full objects) so the queue
     can be restored on cold start by re-fetching from Plex.
+
+    Uses queue.get_all_keys() which returns the full key list
+    even if only a subset of tracks are loaded in memory.
     """
-    if not queue.tracks:
+    track_keys = queue.get_all_keys()
+    if not track_keys:
         # Delete the item if queue is empty
         try:
             table.delete_item(Key={"user_id": user_id})
@@ -31,19 +35,19 @@ def save_queue(user_id, queue):
             logger.warning("Failed to delete queue: %s", e)
         return
 
-    track_keys = [str(t.ratingKey) for t in queue.tracks]
     ttl = int(time.time()) + (TTL_HOURS * 3600)
 
     try:
         table.put_item(Item={
             "user_id": user_id,
             "track_keys": track_keys,
-            "current_index": queue.current_index,
+            "current_index": queue.absolute_index,
             "shuffle_enabled": queue.shuffle_enabled,
             "loop_enabled": queue.loop_enabled,
+            "pause_offset_ms": queue.pause_offset_ms,
             "ttl": ttl,
         })
-        logger.info("Saved queue: %d tracks, index %d", len(track_keys), queue.current_index)
+        logger.info("Saved queue: %d tracks, index %d", len(track_keys), queue.absolute_index)
     except Exception as e:
         logger.error("Failed to save queue: %s", e)
 
@@ -70,23 +74,30 @@ def load_queue(user_id):
             "current_index": int(item.get("current_index", 0)),
             "shuffle_enabled": item.get("shuffle_enabled", False),
             "loop_enabled": item.get("loop_enabled", False),
+            "pause_offset_ms": int(item.get("pause_offset_ms", 0)),
         }
     except Exception as e:
         logger.error("Failed to load queue: %s", e, exc_info=True)
         return None
 
 
-def update_index(user_id, current_index):
-    """Update just the current index (lightweight update for track advances)."""
+def update_index(user_id, current_index, pause_offset_ms=None):
+    """Update just the current index and optionally pause offset (lightweight update)."""
     try:
+        update_expr = "SET current_index = :idx, #ttl = :ttl"
+        attr_values = {
+            ":idx": current_index,
+            ":ttl": int(time.time()) + (TTL_HOURS * 3600),
+        }
+        if pause_offset_ms is not None:
+            update_expr += ", pause_offset_ms = :offset"
+            attr_values[":offset"] = pause_offset_ms
+
         table.update_item(
             Key={"user_id": user_id},
-            UpdateExpression="SET current_index = :idx, #ttl = :ttl",
+            UpdateExpression=update_expr,
             ExpressionAttributeNames={"#ttl": "ttl"},
-            ExpressionAttributeValues={
-                ":idx": current_index,
-                ":ttl": int(time.time()) + (TTL_HOURS * 3600),
-            },
+            ExpressionAttributeValues=attr_values,
         )
     except Exception as e:
         logger.error("Failed to update index: %s", e)
