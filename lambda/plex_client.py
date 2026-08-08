@@ -211,21 +211,63 @@ class PlexMusicClient:
         return f"{self.stream_base_url}{track.key}?X-Plex-Token={self.token}"
 
     def get_track_info(self, track):
-        """Extract metadata from a track for Alexa cards/speech."""
-        # Prefer originalTitle (per-track artist from ID3 tags) over
-        # grandparentTitle (library folder artist, often "Various Artists")
-        artist = track.originalTitle or track.grandparentTitle or "Unknown Artist"
-        return {
-            "title": track.title,
-            "artist": artist,
-            "album": track.parentTitle or "Unknown Album",
-            "duration_ms": track.duration or 0,
-            "art_url": self._get_art_url(track),
-        }
+        """Extract metadata from a track for Alexa cards/speech.
+
+        Uses safe attribute access to avoid plexapi's lazy-reload behavior.
+        When plexapi encounters a None attribute, it re-fetches the item from
+        the server — which can timeout if Plex is momentarily unreachable.
+        We use getattr with _data fallback to avoid triggering reloads.
+        """
+        try:
+            # Prefer originalTitle (per-track artist from ID3 tags) over
+            # grandparentTitle (library folder artist, often "Various Artists")
+            artist = (self._safe_attr(track, "originalTitle")
+                      or self._safe_attr(track, "grandparentTitle")
+                      or "Unknown Artist")
+            return {
+                "title": self._safe_attr(track, "title") or "Unknown Track",
+                "artist": artist,
+                "album": self._safe_attr(track, "parentTitle") or "Unknown Album",
+                "duration_ms": self._safe_attr(track, "duration") or 0,
+                "art_url": self._get_art_url(track),
+            }
+        except Exception as e:
+            logger.warning("Failed to get track info: %s", e)
+            # Return minimal info so playback can still proceed
+            return {
+                "title": getattr(track, "_title", None) or "Unknown Track",
+                "artist": "Unknown Artist",
+                "album": "Unknown Album",
+                "duration_ms": 0,
+                "art_url": None,
+            }
+
+    @staticmethod
+    def _safe_attr(track, attr_name):
+        """Access a track attribute without triggering plexapi's lazy reload.
+
+        plexapi's __getattribute__ triggers a full server reload when an
+        attribute is None (to handle partial fetches). This bypasses that
+        by reading directly from the object's __dict__ or _data XML element.
+        """
+        # First try __dict__ (already-set Python attributes)
+        val = track.__dict__.get(attr_name)
+        if val is not None:
+            return val
+        # Fall back to the raw XML data if available (avoids network call)
+        if hasattr(track, "_data") and track._data is not None:
+            val = track._data.attrib.get(attr_name)
+            if val is not None:
+                return val
+        # Last resort: try normal access but with a short timeout guard
+        # (this may trigger a reload, but we catch failures in the caller)
+        return None
 
     def _get_art_url(self, track):
         """Get album art URL via CloudFront for Alexa display."""
-        thumb = track.thumb or track.parentThumb or track.grandparentThumb
+        thumb = (self._safe_attr(track, "thumb")
+                 or self._safe_attr(track, "parentThumb")
+                 or self._safe_attr(track, "grandparentThumb"))
         if thumb:
             return f"{self.stream_base_url}{thumb}?X-Plex-Token={self.token}"
         return None

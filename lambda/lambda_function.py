@@ -644,6 +644,9 @@ class PlaybackStartedHandler(AbstractRequestHandler):
         restore_queue_if_empty(handler_input)
         queue = get_queue(handler_input)
 
+        # Reset failure counter — playback is working
+        queue._consecutive_failures = 0
+
         # Sync queue index with what's actually playing
         token = handler_input.request_envelope.request.token
         if token and queue.tracks:
@@ -693,10 +696,14 @@ class PlaybackFinishedHandler(AbstractRequestHandler):
 class PlaybackFailedHandler(AbstractRequestHandler):
     """Handle playback failure.
 
+    When Alexa can't stream a track (e.g., CloudFront origin timeout),
+    attempt to skip to the next track in the queue. If that also fails
+    or there are no more tracks, stop cleanly.
+
     Note: AudioPlayer event responses cannot include speech output.
-    We log the error and stop cleanly. The user will notice silence
-    and can retry with a voice command.
     """
+
+    MAX_SKIP_ATTEMPTS = 3  # Don't infinite-loop through broken tracks
 
     def can_handle(self, handler_input):
         return is_request_type("AudioPlayer.PlaybackFailed")(handler_input)
@@ -705,7 +712,76 @@ class PlaybackFailedHandler(AbstractRequestHandler):
         request = handler_input.request_envelope.request
         logger.error("Playback failed: %s", request)
 
-        # AudioPlayer responses cannot speak — just stop cleanly
+        # Try to advance to the next track
+        restore_queue_if_empty(handler_input)
+        queue = get_queue(handler_input)
+
+        if not queue or not queue.tracks:
+            return (
+                handler_input.response_builder.add_directive(StopDirective())
+                .response
+            )
+
+        # Track how many consecutive failures we've had (stored in queue)
+        fail_count = getattr(queue, "_consecutive_failures", 0) + 1
+        queue._consecutive_failures = fail_count
+
+        if fail_count > self.MAX_SKIP_ATTEMPTS:
+            logger.error(
+                "Stopping after %d consecutive playback failures", fail_count
+            )
+            queue._consecutive_failures = 0
+            return (
+                handler_input.response_builder.add_directive(StopDirective())
+                .response
+            )
+
+        # Find the failed track and advance past it
+        failed_token = getattr(request, "token", None)
+        if failed_token and queue.tracks:
+            idx = queue.find_track_index(failed_token)
+            if idx >= 0:
+                queue.current_index = idx
+
+        # Move to the next track
+        next_index = queue.current_index + 1
+        next_track = None
+
+        if next_index < len(queue.tracks):
+            next_track = queue.tracks[next_index]
+            queue.current_index = next_index
+        elif queue.has_next_key():
+            next_rating_key = queue.next_key()
+            next_tracks = plex_client.get_tracks_by_keys([next_rating_key])
+            if next_tracks:
+                queue.trim_before_current()
+                queue.tracks.append(next_tracks[0])
+                queue.current_index = len(queue.tracks) - 1
+                next_track = next_tracks[0]
+
+        if next_track:
+            try:
+                directive, _ = build_audio_play_directive(
+                    next_track, plex_client, queue,
+                    enqueue=False,  # REPLACE — start fresh
+                )
+                device_id = get_device_id(handler_input)
+                real_index = queue.base_index + queue.current_index
+                queue_persistence.update_index(device_id, real_index)
+                logger.info(
+                    "Recovering from failure: skipping to track index %d",
+                    real_index,
+                )
+                return (
+                    handler_input.response_builder
+                    .add_directive(directive)
+                    .response
+                )
+            except Exception as e:
+                logger.error("Failed to build recovery directive: %s", e)
+
+        # No next track or recovery failed — stop
+        queue._consecutive_failures = 0
         return (
             handler_input.response_builder.add_directive(StopDirective())
             .response
