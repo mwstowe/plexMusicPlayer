@@ -34,10 +34,10 @@ Resources:
       TableName: plexMusicPlayer-queue
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: user_id
+        - AttributeName: device_id
           AttributeType: S
       KeySchema:
-        - AttributeName: user_id
+        - AttributeName: device_id
           KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: ttl

@@ -17,7 +17,7 @@ table = dynamodb.Table(TABLE_NAME)
 logger.info("Queue persistence initialized: table=%s", TABLE_NAME)
 
 
-def save_queue(user_id, queue):
+def save_queue(device_id, queue):
     """Save the current queue state to DynamoDB.
 
     Stores track rating keys (not full objects) so the queue
@@ -25,12 +25,14 @@ def save_queue(user_id, queue):
 
     Uses queue.get_all_keys() which returns the full key list
     even if only a subset of tracks are loaded in memory.
+
+    Keyed by device_id so each Alexa device has its own independent queue.
     """
     track_keys = queue.get_all_keys()
     if not track_keys:
         # Delete the item if queue is empty
         try:
-            table.delete_item(Key={"user_id": user_id})
+            table.delete_item(Key={"device_id": device_id})
         except Exception as e:
             logger.warning("Failed to delete queue: %s", e)
         return
@@ -39,7 +41,7 @@ def save_queue(user_id, queue):
 
     try:
         table.put_item(Item={
-            "user_id": user_id,
+            "device_id": device_id,
             "track_keys": track_keys,
             "current_index": queue.absolute_index,
             "shuffle_enabled": queue.shuffle_enabled,
@@ -52,17 +54,17 @@ def save_queue(user_id, queue):
         logger.error("Failed to save queue: %s", e)
 
 
-def load_queue(user_id):
-    """Load queue state from DynamoDB.
+def load_queue(device_id):
+    """Load queue state from DynamoDB for a specific device.
 
     Returns a dict with track_keys, current_index, shuffle_enabled,
     loop_enabled — or None if no saved state exists.
     """
     try:
-        response = table.get_item(Key={"user_id": user_id})
+        response = table.get_item(Key={"device_id": device_id})
         item = response.get("Item")
         if not item:
-            logger.info("No item found in DynamoDB for user")
+            logger.info("No item found in DynamoDB for device")
             return None
 
         track_keys = item.get("track_keys", [])
@@ -81,7 +83,7 @@ def load_queue(user_id):
         return None
 
 
-def update_index(user_id, current_index, pause_offset_ms=None):
+def update_index(device_id, current_index, pause_offset_ms=None):
     """Update just the current index and optionally pause offset (lightweight update)."""
     try:
         update_expr = "SET current_index = :idx, #ttl = :ttl"
@@ -94,7 +96,7 @@ def update_index(user_id, current_index, pause_offset_ms=None):
             attr_values[":offset"] = pause_offset_ms
 
         table.update_item(
-            Key={"user_id": user_id},
+            Key={"device_id": device_id},
             UpdateExpression=update_expr,
             ExpressionAttributeNames={"#ttl": "ttl"},
             ExpressionAttributeValues=attr_values,

@@ -146,11 +146,13 @@ class PlaybackQueue:
         self.current_index += 1
         self.pause_offset_ms = 0
         if self.current_index >= len(self.tracks):
-            if self.loop_enabled:
+            if self.loop_enabled and not self.all_keys:
+                # Full queue in memory — loop to start
                 self.current_index = 0
                 self.base_index = 0
             else:
-                # Revert — caller should check has_next_key() and fetch
+                # Partial queue or no loop — revert and let caller handle
+                # (caller should check has_next_key() and fetch, or loop externally)
                 self.current_index -= 1
                 return None
 
@@ -176,9 +178,25 @@ class PlaybackQueue:
 
     def append_and_advance(self, track):
         """Append a newly fetched track and advance to it."""
+        self.trim_before_current()
         self.tracks.append(track)
         self.current_index = len(self.tracks) - 1
         self.pause_offset_ms = 0
+
+    def trim_before_current(self):
+        """Trim tracks before current_index to prevent unbounded list growth.
+
+        Adjusts base_index so absolute_index stays correct.
+        Keeps the current track and one before it (for previous_track).
+        """
+        if self.current_index <= 1:
+            return
+        trim_count = self.current_index - 1
+        self.tracks = self.tracks[trim_count:]
+        self.base_index += trim_count
+        self.current_index = 1
+        logger.info("Trimmed %d tracks from queue head, base_index now %d",
+                    trim_count, self.base_index)
 
     def previous_track(self):
         """Go back to the previous track and return it."""
