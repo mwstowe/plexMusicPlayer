@@ -29,6 +29,14 @@ logger.setLevel(logging.INFO)
 
 # Global state (persists across warm Lambda invocations)
 plex_client = PlexMusicClient()
+
+# Pre-warm artist cache during Lambda init phase (up to 10s, outside
+# Alexa's 8-second response timeout). Ensures fuzzy matching is ready
+# for the first request without risking a timeout mid-request.
+try:
+    plex_client._get_artist_cache()
+except Exception as e:
+    logger.warning("Artist cache pre-warm failed (will retry on first search): %s", e)
 _queues = {}  # device_id -> PlaybackQueue (scoped per device)
 _queue_access_order = []  # LRU tracking: most-recently-used device_ids at the end
 MAX_CACHED_QUEUES = 3  # Keep at most 3 device queues in memory
@@ -644,8 +652,9 @@ class PlaybackStartedHandler(AbstractRequestHandler):
         restore_queue_if_empty(handler_input)
         queue = get_queue(handler_input)
 
-        # Reset failure counter — playback is working
+        # Reset failure counters — playback is working
         queue._consecutive_failures = 0
+        queue._retry_count = 0
 
         # Sync queue index with what's actually playing
         token = handler_input.request_envelope.request.token
@@ -694,16 +703,19 @@ class PlaybackFinishedHandler(AbstractRequestHandler):
 
 
 class PlaybackFailedHandler(AbstractRequestHandler):
-    """Handle playback failure.
+    """Handle playback failure with retry-then-skip logic.
 
-    When Alexa can't stream a track (e.g., CloudFront origin timeout),
-    attempt to skip to the next track in the queue. If that also fails
-    or there are no more tracks, stop cleanly.
+    When Alexa can't stream a track (e.g., CloudFront origin timeout):
+    1. Retry the SAME track up to MAX_RETRIES times.
+    2. After all retries are exhausted, skip to the next track.
+    3. If MAX_SKIP_ATTEMPTS consecutive tracks are skipped (all retries
+       exhausted for each), stop playback entirely.
 
     Note: AudioPlayer event responses cannot include speech output.
     """
 
-    MAX_SKIP_ATTEMPTS = 3  # Don't infinite-loop through broken tracks
+    MAX_RETRIES = 3  # Max attempts for the same track before skipping
+    MAX_SKIP_ATTEMPTS = 3  # Max consecutive track skips before stopping
 
     def can_handle(self, handler_input):
         return is_request_type("AudioPlayer.PlaybackFailed")(handler_input)
@@ -712,23 +724,80 @@ class PlaybackFailedHandler(AbstractRequestHandler):
         request = handler_input.request_envelope.request
         logger.error("Playback failed: %s", request)
 
-        # Try to advance to the next track
+        # Restore queue if needed (cold start scenario)
         restore_queue_if_empty(handler_input)
         queue = get_queue(handler_input)
 
         if not queue or not queue.tracks:
+            logger.error("PlaybackFailed: No queue or tracks available, stopping")
             return (
                 handler_input.response_builder.add_directive(StopDirective())
                 .response
             )
 
-        # Track how many consecutive failures we've had (stored in queue)
-        fail_count = getattr(queue, "_consecutive_failures", 0) + 1
-        queue._consecutive_failures = fail_count
+        # Sync queue position with the failed track's token
+        failed_token = getattr(request, "token", None)
+        if failed_token and queue.tracks:
+            idx = queue.find_track_index(failed_token)
+            if idx >= 0:
+                queue.current_index = idx
 
-        if fail_count > self.MAX_SKIP_ATTEMPTS:
+        current_track = queue.current_track()
+
+        # Increment retry count for the current track
+        queue._retry_count += 1
+        logger.info(
+            "PlaybackFailed: track='%s' (token=%s), retry attempt %d/%d",
+            getattr(current_track, "title", "unknown") if current_track else "unknown",
+            failed_token,
+            queue._retry_count,
+            self.MAX_RETRIES,
+        )
+
+        # --- RETRY the same track if we haven't exhausted attempts ---
+        if queue._retry_count <= self.MAX_RETRIES and current_track:
+            logger.info(
+                "Retrying current track (attempt %d/%d): %s",
+                queue._retry_count + 1,  # Next attempt number (human-readable)
+                self.MAX_RETRIES,
+                getattr(current_track, "title", "unknown"),
+            )
+            try:
+                directive, _ = build_audio_play_directive(
+                    current_track, plex_client, queue,
+                    enqueue=False,  # REPLACE — retry from scratch
+                )
+                return (
+                    handler_input.response_builder
+                    .add_directive(directive)
+                    .response
+                )
+            except Exception as e:
+                logger.error("Failed to build retry directive: %s", e)
+                # Fall through to skip logic
+
+        # --- All retries exhausted for this track — SKIP to next ---
+        logger.info(
+            "All %d retries exhausted for track '%s', skipping to next",
+            self.MAX_RETRIES,
+            getattr(current_track, "title", "unknown") if current_track else "unknown",
+        )
+
+        # Reset retry count for the next track
+        queue._retry_count = 0
+
+        # Increment consecutive skip counter (tracks that fully failed)
+        queue._consecutive_failures += 1
+        logger.info(
+            "Consecutive track skips: %d/%d",
+            queue._consecutive_failures,
+            self.MAX_SKIP_ATTEMPTS,
+        )
+
+        if queue._consecutive_failures > self.MAX_SKIP_ATTEMPTS:
             logger.error(
-                "Stopping after %d consecutive playback failures", fail_count
+                "Stopping playback: %d consecutive tracks failed after all retries",
+                consecutive_skips,
             )
             queue._consecutive_failures = 0
             return (
@@ -736,14 +805,7 @@ class PlaybackFailedHandler(AbstractRequestHandler):
                 .response
             )
 
-        # Find the failed track and advance past it
-        failed_token = getattr(request, "token", None)
-        if failed_token and queue.tracks:
-            idx = queue.find_track_index(failed_token)
-            if idx >= 0:
-                queue.current_index = idx
-
-        # Move to the next track
+        # Advance to the next track
         next_index = queue.current_index + 1
         next_track = None
 
@@ -752,6 +814,7 @@ class PlaybackFailedHandler(AbstractRequestHandler):
             queue.current_index = next_index
         elif queue.has_next_key():
             next_rating_key = queue.next_key()
+            logger.info("Fetching next track for skip recovery: key=%s", next_rating_key)
             next_tracks = plex_client.get_tracks_by_keys([next_rating_key])
             if next_tracks:
                 queue.trim_before_current()
@@ -769,8 +832,9 @@ class PlaybackFailedHandler(AbstractRequestHandler):
                 real_index = queue.base_index + queue.current_index
                 queue_persistence.update_index(device_id, real_index)
                 logger.info(
-                    "Recovering from failure: skipping to track index %d",
+                    "Skipped to next track (index %d): %s",
                     real_index,
+                    getattr(next_track, "title", "unknown"),
                 )
                 return (
                     handler_input.response_builder
@@ -778,10 +842,12 @@ class PlaybackFailedHandler(AbstractRequestHandler):
                     .response
                 )
             except Exception as e:
-                logger.error("Failed to build recovery directive: %s", e)
+                logger.error("Failed to build skip directive: %s", e)
 
-        # No next track or recovery failed — stop
+        # No next track available or skip failed — stop playback
+        logger.info("No more tracks available after skip, stopping playback")
         queue._consecutive_failures = 0
+        queue._retry_count = 0
         return (
             handler_input.response_builder.add_directive(StopDirective())
             .response

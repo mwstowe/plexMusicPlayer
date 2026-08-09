@@ -1,5 +1,6 @@
 """Plex Media Server integration for music playback."""
 
+import difflib
 import logging
 import os
 from urllib.parse import urlencode
@@ -13,16 +14,30 @@ logger = logging.getLogger(__name__)
 
 PLEX_TV_RESOURCES_URL = "https://plex.tv/api/resources"
 
+# Manual overrides for artist names that Alexa frequently misinterprets.
+# Keys should be lowercase. Values are the correct artist name in your library.
+# Examples:
+#   "led zeppelin": "Led Zeppelin",
+#   "ac dc": "AC/DC",
+#   "guns and roses": "Guns N' Roses",
+ARTIST_MAPPINGS = {}
 
-def resolve_plex_url(token, timeout=5):
-    """Resolve the Plex server URL dynamically via plex.tv API.
+
+def resolve_plex_urls(token, timeout=5):
+    """Resolve Plex server URLs dynamically via plex.tv API.
 
     Queries plex.tv/api/resources?includeHttps=1 to find the server's
-    current connection URI. Prefers the remote (local="0") HTTPS
-    .plex.direct connection, which tracks the server's current public IP.
+    current connection URIs. Returns both the direct URL (for Lambda API
+    calls) and the relay URL (for Alexa streaming fallback) in a single
+    network request.
 
-    Returns the best available URL, or None if resolution fails.
+    Returns:
+        dict with keys:
+            "direct": The remote HTTPS .plex.direct URL (or best alternative), or None
+            "relay": The Plex relay URL (HTTPS port 443, trusted cert), or None
     """
+    result = {"direct": None, "relay": None}
+
     try:
         resp = requests.get(
             PLEX_TV_RESOURCES_URL,
@@ -38,52 +53,114 @@ def resolve_plex_url(token, timeout=5):
         for device in root.findall("./Device[@product='Plex Media Server']"):
             connections = device.findall(".//Connection")
 
-            # First pass: remote HTTPS .plex.direct connection (ideal for Lambda)
+            # Look for direct URL: prefer remote HTTPS .plex.direct
             for conn in connections:
                 uri = conn.get("uri", "")
                 if (conn.get("protocol") == "https"
                         and conn.get("local") == "0"
                         and "plex.direct" in uri):
-                    logger.info("Resolved Plex URL via plex.tv: %s", uri)
-                    return uri
+                    result["direct"] = uri
+                    break
 
-            # Second pass: any remote HTTPS connection
+            # Fallback direct: any remote HTTPS connection
+            if not result["direct"]:
+                for conn in connections:
+                    uri = conn.get("uri", "")
+                    if (conn.get("protocol") == "https"
+                            and conn.get("local") == "0"):
+                        result["direct"] = uri
+                        break
+
+            # Look for relay URL
             for conn in connections:
-                uri = conn.get("uri", "")
-                if (conn.get("protocol") == "https"
-                        and conn.get("local") == "0"):
-                    logger.info("Resolved Plex URL via plex.tv (non-direct): %s", uri)
-                    return uri
+                if conn.get("relay") == "1":
+                    result["relay"] = conn.get("uri", "")
+                    break
 
-        logger.warning("No suitable Plex server connection found in plex.tv response")
-        return None
+            # Use first PMS device found (most users have one server)
+            if result["direct"]:
+                break
+
+        if result["direct"]:
+            logger.info("Resolved Plex direct URL via plex.tv: %s", result["direct"])
+        if result["relay"]:
+            logger.info("Resolved Plex relay URL via plex.tv: %s", result["relay"])
+        if not result["direct"] and not result["relay"]:
+            logger.warning("No suitable Plex server connection found in plex.tv response")
+
+        return result
 
     except Exception as e:
-        logger.warning("Failed to resolve Plex URL from plex.tv: %s", e)
-        return None
+        logger.warning("Failed to resolve Plex URLs from plex.tv: %s", e)
+        return result
 
 
 class PlexMusicClient:
-    """Client for interacting with Plex music libraries."""
+    """Client for interacting with Plex music libraries.
+
+    Note: When STREAM_BASE_URL is not set, the client will attempt to detect
+    a Plex relay URL as a fallback for streaming. Relay URLs provide HTTPS on
+    port 443 with trusted certificates (compatible with Alexa), but have
+    bandwidth limitations imposed by Plex. For best audio quality and
+    reliability, set STREAM_BASE_URL to a CloudFront distribution that
+    proxies your Plex server.
+    """
 
     def __init__(self, base_url=None, token=None, library_name=None):
         self.token = token or os.environ["PLEX_TOKEN"]
-        self.base_url = base_url or self._resolve_base_url()
         self.library_name = library_name or os.environ.get("PLEX_MUSIC_LIBRARY", "Music")
-        self.stream_base_url = os.environ.get("STREAM_BASE_URL", self.base_url)
         self._server = None
         self._music_library = None
+        self._artist_cache = None
+
+        # Resolve server URLs: direct (for API calls) and relay (for streaming fallback)
+        if base_url:
+            self.base_url = base_url
+            self._relay_url = None
+        else:
+            self.base_url, self._relay_url = self._resolve_base_url()
+
+        # Determine streaming URL priority:
+        # 1. Explicit STREAM_BASE_URL (CloudFront) — best quality, no bandwidth caps
+        # 2. Plex relay URL — HTTPS port 443, trusted cert, but bandwidth-limited
+        # 3. base_url — may not work with Alexa (wrong port / untrusted cert)
+        explicit_stream_url = os.environ.get("STREAM_BASE_URL")
+        if explicit_stream_url:
+            self.stream_base_url = explicit_stream_url
+        elif self._relay_url:
+            logger.info("Using Plex relay URL for streaming: %s", self._relay_url)
+            self.stream_base_url = self._relay_url
+        else:
+            logger.warning(
+                "No STREAM_BASE_URL configured and no relay URL available. "
+                "Streaming will use base_url (%s) which may not work with "
+                "Alexa (requires HTTPS on port 443 with trusted cert).",
+                self.base_url,
+            )
+            self.stream_base_url = self.base_url
 
     def _resolve_base_url(self):
-        """Resolve the Plex server URL, trying plex.tv first, then env var fallback."""
-        resolved = resolve_plex_url(self.token)
-        if resolved:
-            return resolved
+        """Resolve Plex server URLs with a single plex.tv call.
 
+        Returns:
+            Tuple of (base_url, relay_url). relay_url may be None.
+
+        Raises:
+            ValueError: If no server URL can be determined.
+        """
+        urls = resolve_plex_urls(self.token)
+
+        base_url = urls["direct"]
+        relay_url = urls["relay"]
+
+        if base_url:
+            return base_url, relay_url
+
+        # plex.tv resolution failed — try env var fallback
         plex_url = os.environ.get("PLEX_URL")
         if plex_url:
             logger.info("Using PLEX_URL env var as fallback: %s", plex_url)
-            return plex_url
+            return plex_url, relay_url
 
         raise ValueError(
             "Cannot determine Plex server URL: plex.tv resolution failed "
@@ -101,6 +178,38 @@ class PlexMusicClient:
         if self._music_library is None:
             self._music_library = self.server.library.section(self.library_name)
         return self._music_library
+
+    def _get_artist_cache(self):
+        """Lazily load and return a list of all artist names in the library."""
+        if self._artist_cache is None:
+            artists = self.music_library.searchArtists()
+            self._artist_cache = [artist.title for artist in artists]
+            logger.info("Loaded artist cache: %d artists", len(self._artist_cache))
+        return self._artist_cache
+
+    def _fuzzy_match_artist(self, spoken_name):
+        """Attempt to match a spoken artist name to a library artist.
+
+        Checks manual ARTIST_MAPPINGS first (case-insensitive), then falls
+        back to difflib fuzzy matching against the full artist cache.
+
+        Returns the matched name, or the original spoken_name if no match found.
+        """
+        # Check manual overrides first (case-insensitive)
+        mapping_key = spoken_name.lower()
+        for key, value in ARTIST_MAPPINGS.items():
+            if key.lower() == mapping_key:
+                logger.info("Artist mapping override: '%s' -> '%s'", spoken_name, value)
+                return value
+
+        # Fuzzy match against cached artist names
+        cache = self._get_artist_cache()
+        matches = difflib.get_close_matches(spoken_name, cache, n=1, cutoff=0.6)
+        if matches:
+            logger.info("Fuzzy matched artist: '%s' -> '%s'", spoken_name, matches[0])
+            return matches[0]
+
+        return spoken_name
 
     def search_tracks(self, query):
         """Search for tracks by title.
@@ -124,6 +233,8 @@ class PlexMusicClient:
         per-track original artists (originalTitle) for compilations
         and loose files where the folder artist differs from the
         actual track artist.
+
+        Falls back to fuzzy matching when exact search fails.
         """
         # First try library-level artist search
         results = self.music_library.searchArtists(title=artist_name)
@@ -132,6 +243,16 @@ class PlexMusicClient:
             tracks = artist.tracks()
             if tracks:
                 return tracks
+
+        # Try fuzzy matching before falling back to track-level search
+        fuzzy_name = self._fuzzy_match_artist(artist_name)
+        if fuzzy_name != artist_name:
+            results = self.music_library.searchArtists(title=fuzzy_name)
+            if results:
+                artist = results[0]
+                tracks = artist.tracks()
+                if tracks:
+                    return tracks
 
         # Fall back to track-level search which matches originalTitle
         tracks = self.music_library.search(artist_name, libtype="track")
@@ -198,9 +319,12 @@ class PlexMusicClient:
     def get_stream_url(self, track):
         """Build an HTTPS streaming URL for a track.
 
-        Uses CloudFront (STREAM_BASE_URL) as the CDN in front of Plex.
-        CloudFront connects to Plex on port 32400, and the Plex token
-        is passed as a query parameter for authentication.
+        Uses stream_base_url which may be:
+        - CloudFront (STREAM_BASE_URL env var) — CDN in front of Plex, best quality
+        - Plex relay — auto-detected HTTPS proxy with bandwidth limits
+        - Direct Plex URL — fallback, may not work with Alexa
+
+        The Plex token is passed as a query parameter for authentication.
         """
         if track.media and track.media[0].parts:
             part = track.media[0].parts[0]

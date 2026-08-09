@@ -34,6 +34,9 @@ class PlaybackQueue:
         self.shuffle_enabled = False
         self.loop_enabled = False
         self.pause_offset_ms = 0
+        # Playback failure tracking (used by PlaybackFailedHandler)
+        self._retry_count = 0  # Retries for the current track
+        self._consecutive_failures = 0  # Consecutive tracks that exhausted all retries
 
     def load(self, tracks):
         """Load a list of tracks into the queue (fresh play command)."""

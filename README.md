@@ -5,12 +5,15 @@ An Alexa skill that streams music from your Plex Media Server. Play songs, artis
 ## Features
 
 - **Play by song, artist, album, or playlist** — natural language search against your Plex library
+- **Fuzzy artist matching** — handles Alexa misheard artist names (e.g., "doctor dre" → "Dr. Dre") using phonetic similarity matching, plus manual override mappings
 - **Full playback controls** — next, previous, pause, resume, shuffle, loop, start over
+- **Playback retry with auto-recovery** — retries failed tracks up to 3 times before skipping, handles transient streaming errors gracefully
 - **Resume from where you left off** — pause position persists across Lambda cold starts
 - **Now Playing** — ask what's currently playing to get track/artist/album info with display support for Echo Show
 - **Queue management** — automatically queues multiple tracks with DynamoDB persistence
 - **Compilation support** — correctly identifies per-track artists in "Various Artists" folders
 - **Dynamic server discovery** — resolves your Plex server URL via plex.tv API (adapts to IP changes)
+- **Plex Relay fallback** — streams via Plex's relay servers when CloudFront isn't configured, simplifying initial setup
 - **Spoken error messages** — tells you what went wrong instead of failing silently
 
 ## Architecture
@@ -37,7 +40,9 @@ An Alexa skill that streams music from your Plex Media Server. Play songs, artis
 3. **DynamoDB** persists queue state (track list, position, shuffle/loop, pause offset) across cold starts
 4. **Alexa** streams audio through CloudFront, which fetches from Plex on port 32400
 
-CloudFront is required because Alexa devices only stream from port 443 with trusted TLS certificates. CloudFront provides both, and is free for personal use (1TB/month free tier).
+Alexa devices only stream from HTTPS port 443 with trusted TLS certificates. Two options:
+- **CloudFront (recommended)** — provides a trusted CDN endpoint with no bandwidth limits (1TB/month free tier)
+- **Plex Relay (automatic fallback)** — if `STREAM_BASE_URL` is not set, the Lambda auto-detects Plex's relay servers which provide trusted HTTPS on port 443, but with bandwidth limitations
 
 ## Prerequisites
 
@@ -138,7 +143,7 @@ export ALEXA_SKILL_ID="amzn1.ask.skill.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ./deploy.sh
 ```
 
-After deployment, set the `STREAM_BASE_URL` environment variable on the Lambda:
+After deployment, optionally set the `STREAM_BASE_URL` environment variable on the Lambda (only needed if using CloudFront):
 
 ```bash
 aws lambda update-function-configuration \
@@ -148,6 +153,8 @@ aws lambda update-function-configuration \
 ```
 
 Note: `PLEX_URL` is optional — the Lambda resolves the server URL dynamically via plex.tv using your token. Setting it provides a fallback if plex.tv is unreachable.
+
+Note: `STREAM_BASE_URL` is optional — if not set, the Lambda auto-detects Plex's relay servers for streaming. CloudFront is recommended for best quality (no bandwidth limits), but the skill works without it.
 
 ### 6. Connect the Skill to Lambda
 
@@ -228,7 +235,7 @@ plexMusicPlayer/
 | Environment Variable | Required | Description |
 |---------------------|----------|-------------|
 | `PLEX_TOKEN` | Yes | Your Plex authentication token |
-| `STREAM_BASE_URL` | Yes | Your CloudFront domain (e.g., `https://d1234abcdef.cloudfront.net`) |
+| `STREAM_BASE_URL` | No | Your CloudFront domain (e.g., `https://d1234abcdef.cloudfront.net`). If not set, auto-detects Plex relay for streaming |
 | `PLEX_URL` | No | Fallback Plex server URL. If not set, resolved dynamically via plex.tv |
 | `PLEX_MUSIC_LIBRARY` | No | Name of your music library section (default: `Music`) |
 | `QUEUE_TABLE` | No | DynamoDB table name for queue persistence (default: `plexMusicPlayer-queue`, auto-created by SAM) |
@@ -255,6 +262,19 @@ The skill provides spoken error messages for common failure modes:
 - **Connection timeout**: "Your Plex server isn't responding..."
 - **SSL certificate mismatch**: "There's a certificate error connecting to your Plex server..."
 - **Generic errors**: "Sorry, something went wrong. Please try again."
+
+### Playback Retry
+
+When a track fails to stream (transient network errors, relay hiccups, etc.), the skill retries the same track up to 3 times before giving up. If the track still can't play after all retries, it skips to the next track in the queue. If 3 consecutive tracks fail (all retries exhausted for each), playback stops entirely to avoid an infinite failure loop.
+
+### Fuzzy Artist Matching
+
+Alexa frequently misinterprets artist names ("led zeplin" instead of "Led Zeppelin", "doctor dre" instead of "Dr. Dre"). When an exact artist search returns no results, the skill:
+1. Checks `ARTIST_MAPPINGS` (a configurable dict in `plex_client.py`) for known overrides
+2. Uses `difflib.get_close_matches` against a cache of all artist names in your library (60% similarity threshold)
+3. Retries the search with the best fuzzy match
+
+The artist cache is loaded once on first search and persists for the Lambda's warm lifetime.
 
 The PlexServer connection timeout is set to 8 seconds to ensure the Lambda can respond to Alexa before the 15-second timeout, even when Plex is unreachable.
 
@@ -334,6 +354,7 @@ For personal use, this should remain within the free tier indefinitely.
 - **Single Plex server** — if multiple servers are accessible, uses the first one found
 - **MP3/AAC only** — FLAC and other formats require transcoding (not yet implemented)
 - **CloudFront origin is static** — if your public IP changes permanently, update the CloudFront origin manually
+- **Plex Relay bandwidth limits** — when using relay fallback (no CloudFront), Plex imposes bandwidth caps that may affect high-bitrate audio
 
 ## Credits
 
